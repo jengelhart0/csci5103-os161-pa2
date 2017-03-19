@@ -48,11 +48,13 @@
 #include <current.h>
 #include <addrspace.h>
 #include <vnode.h>
+ #include <kern/limits.h>
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
  */
-struct proc *kproc;
+struct proc* kproc;
+struct pid_list_node* pid_list = NULL;
 
 /*
  * Create a proc structure.
@@ -82,6 +84,12 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
+	int error = 0;
+	proc->pid = new_pid(&error);
+	if(proc->pid < 0) {
+		//TODO: at this point, error contains an error code, if it should be reported
+		return 0;
+	}
 	return proc;
 }
 
@@ -317,4 +325,73 @@ proc_setas(struct addrspace *newas)
 	proc->p_addrspace = newas;
 	spinlock_release(&proc->p_lock);
 	return oldas;
+}
+
+
+// I believe this is a better solution than using a hash table, given the relatively
+// small amount of memory SYS161 provides. If many processes are running, then there 
+// probably won't be many processes created in quick succession (otherwise we'd run out of memory), 
+// and if many processes have quit, the next new processes should be quickly assigned to a low-numbered
+// pid. This avoids the (I think) greater complexity of a hash table and hash function overhead.
+
+pid_t new_pid(int* err) {
+	//if this is the first process, create list and pid = __PID_MIN:
+	if (pid_list == NULL) {
+		pid_list = kmalloc(sizeof(struct pid_list_node));
+		//if list was NULL and could not alloc, must be out of memory
+		if(pid_list == NULL) {
+			*err = ENOMEM;
+			return -1;
+		}
+		pid_list->next = NULL;
+		pid_list->pid = __PID_MIN-1;
+		return __PID_MIN-1;
+	}
+
+	else {
+		struct pid_list_node* prev =  pid_list;
+		struct pid_list_node* cur = pid_list->next;
+		int next_expected_pid = pid_list->pid + 1;
+		while(cur != NULL && cur->pid == next_expected_pid) {
+			prev = prev->next;
+			cur = cur->next;
+			next_expected_pid++;
+		}
+		//When we get here, prev == the highest numbered process before a gap is reached
+		if(prev->pid == __PID_MAX) {
+			*err = ENPROC; //error for proc table being full
+			return -1;
+		} 
+		cur = kmalloc(sizeof(struct pid_list_node));
+		//if n was NULL and could not alloc, must be out of memory
+		if(cur == NULL) {
+			*err = ENOMEM; 
+			return -1;
+		}
+		cur->pid = prev->pid +1;
+		cur->next = prev->next;
+		prev->next = cur;
+		return cur->pid;
+	}
+}
+
+// returns 0 if successful
+pid_t remove_pid(pid_t p, int* err) {
+	if(p < __PID_MIN || pid_list == NULL) {
+		panic("Tried to remove an invalid PID");
+	}
+	struct pid_list_node* prev = pid_list;
+	struct pid_list_node* cur = pid_list->next;
+	while(cur!=NULL && cur->pid!=p) {
+		prev = cur;
+		cur = cur->next;
+	}
+	if(cur==NULL) {
+		//pid was not in list
+		*err = EINVAL;
+		return -1;
+	}
+	prev->next = cur->next;
+	kfree(cur);
+	return 0;
 }

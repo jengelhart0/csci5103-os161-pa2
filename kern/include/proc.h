@@ -37,6 +37,8 @@
  */
 
 #include <spinlock.h>
+#include <types.h>
+#include <kern/errno.h>
 
 struct addrspace;
 struct thread;
@@ -60,18 +62,28 @@ struct vnode;
  * without sleeping.
  */
 struct proc {
-	char *p_name;			/* Name of this process */
-	struct spinlock p_lock;		/* Lock for this structure */
-	unsigned p_numthreads;		/* Number of threads in this process */
+  char *p_name;     /* Name of this process */
+  struct spinlock p_lock;   /* Lock for this structure */
+  unsigned p_numthreads;    /* Number of threads in this process */
 
-	/* VM */
-	struct addrspace *p_addrspace;	/* virtual address space */
+  /* VM */
+  struct addrspace *p_addrspace;  /* virtual address space */
 
-	/* VFS */
-	struct vnode *p_cwd;		/* current working directory */
+  /* VFS */
+  struct vnode *p_cwd;    /* current working directory */
 
-	/* add more material here as needed */
+  /* add more material here as needed */
+  // ids for this process and its parent
+  pid_t pid, ppid;
 };
+
+struct pid_list_node {
+  pid_t pid;
+  struct pid_list_node* next;
+};
+
+/* List for tracking pids */
+extern struct pid_list_node* pid_list;
 
 /* This is the process structure for the kernel and for kernel-only threads. */
 extern struct proc *kproc;
@@ -97,5 +109,13 @@ struct addrspace *proc_getas(void);
 /* Change the address space of the current process, and return the old one. */
 struct addrspace *proc_setas(struct addrspace *);
 
+
+// PID LIST HELPER FUNCTIONS //
+
+/* Add a new pid to list of all pids */
+pid_t new_pid(int* err);
+
+/* Remove a pid from the list of all pids, returns 0 if successful*/
+pid_t remove_pid(pid_t p, int* err);
 
 #endif /* _PROC_H_ */
