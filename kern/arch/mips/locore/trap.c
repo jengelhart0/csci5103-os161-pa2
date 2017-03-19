@@ -108,6 +108,9 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 		break;
 	}
 
+	//TODO: right now, the OS panics after every user program; eventually should probably put sys__exit() 
+	// call here to clean up after closing thread
+
 	/*
 	 * You will probably want to change this.
 	 */
