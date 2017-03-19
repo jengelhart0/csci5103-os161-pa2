@@ -32,6 +32,7 @@
 
 
 #include <cdefs.h> /* for __DEAD */
+#include <process_syscalls.h>
 struct trapframe; /* from <machine/trapframe.h> */
 
 /*
