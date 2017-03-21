@@ -173,6 +173,7 @@ proc_destroy(struct proc *proc)
 		as_destroy(as);
 	}
 
+	// TODO: Remove pid from pidlist
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 

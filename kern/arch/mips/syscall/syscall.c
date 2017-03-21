@@ -109,7 +109,7 @@ syscall(struct trapframe *tf)
 				 (userptr_t)tf->tf_a1);
 		break;
             case SYS_getpid:
-		retval = sys_getpid();
+		err = sys_getpid(&retval);
 		//always successful 
 		err = 0;
 		break;
@@ -153,7 +153,7 @@ syscall(struct trapframe *tf)
 	}
 	else {
 		/* Success. */
-		tf->tf_v0 = retval;
+		tf->tf_v0 = (pid_t) retval;
 		tf->tf_a3 = 0;      /* signal no error */
 	}
 

@@ -12,7 +12,7 @@
 
 //In Linux getpid is always successful, so errno should be set to 0 in syscall.c
 //Returns the pid of the current thread's parent process
-int sys_getpid(pid_t *pid) {
+int sys_getpid(int32_t *pid) {
 	spinlock_acquire(&curthread->t_proc->p_lock);
 	*pid = curthread->t_proc->pid;
 	spinlock_release(&curthread->t_proc->p_lock);
@@ -20,7 +20,7 @@ int sys_getpid(pid_t *pid) {
  	return(0);
 }
 
-int sys_fork(struct trapframe *tf, pid_t *retpid) {
+int sys_fork(struct trapframe *tf, int32_t *retpid) {
 
 	int result;
 	// copy trapframe for child
@@ -34,6 +34,7 @@ int sys_fork(struct trapframe *tf, pid_t *retpid) {
 	// create new child process
 	struct proc *child_proc = proc_create(curthread->t_proc->p_name);
 	proc_setas(child_proc, proc_getas());
+	// NEED TO GETPID AND SET CHILD_PROC'S PPID TO IT
 	
 	if(result = thread_fork(curthread->t_name, child_proc,
 				enter_forked_process, child_tf, NULL))
