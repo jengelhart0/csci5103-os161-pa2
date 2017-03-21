@@ -307,7 +307,6 @@ proc_getas(void)
 	spinlock_release(&proc->p_lock);
 	return as;
 }
-
 /*
  * Change the address space of (the current) process. Return the old
  * one for later restoration or disposal.
@@ -326,14 +325,28 @@ proc_setas(struct addrspace *newas)
 	spinlock_release(&proc->p_lock);
 	return oldas;
 }
+/* 
+ * Change the address space of the passed process. Otherwise identical to other proc *_setas()
+ */
+struct addrspace *
+proc_setas(struct proc *proc, struct addrspace *newas)
+{
+	struct addrspace *oldas;
 
+	KASSERT(proc != NULL);
 
+	spinlock_acquire(&proc->p_lock);
+	oldas = proc->p_addrspace;
+	proc->p_addrspace = newas;
+	spinlock_release(&proc->p_lock);
+	return oldas;
+}
 // I believe this is a better solution than using a hash table, given the relatively
 // small amount of memory SYS161 provides. If many processes are running, then there 
 // probably won't be many processes created in quick succession (otherwise we'd run out of memory), 
 // and if many processes have quit, the next new processes should be quickly assigned to a low-numbered
 // pid. This avoids the (I think) greater complexity of a hash table and hash function overhead.
-
+// FORK TODO: synchronize access here!!
 pid_t new_pid(int* err) {
 	//if this is the first process, create list and pid = __PID_MIN:
 	if (pid_list == NULL) {

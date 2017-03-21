@@ -108,35 +108,33 @@ syscall(struct trapframe *tf)
 		err = sys___time((userptr_t)tf->tf_a0,
 				 (userptr_t)tf->tf_a1);
 		break;
-		  case SYS_getpid:
+            case SYS_getpid:
 		retval = sys_getpid();
 		//always successful 
 		err = 0;
 		break;
 
-		  case SYS_fork:
-		  //pass retval as above, but use return for error reporting, possible errors by man page:
-		  // EMPROC - The current user already has too many processes.
-		  // ENPROC - There are already too many processes on the system.
-		  // ENOMEM - Sufficient virtual memory for the new process was not available.
+            case SYS_fork:
+                //pass retval as above, but use return for error reporting, possible errors by man page:
+		// EMPROC - The current user already has too many processes.
+		// ENPROC - There are already too many processes on the system.
+		// ENOMEM - Sufficient virtual memory for the new process was not available.
 		
 		//also pass whole frame so it can be copied into new process
-		err = sys_fork(tf, &retval);
+		err = sys_fork(&tf, &retval);
 		break;
 
-			case SYS_execv:
-		  //Need to write
+  	    case SYS_execv:
+		//Need to write
 		break;
 		  
-		  case SYS__exit:
-		  //Need to write
+            case SYS__exit:
+		//Need to write
 		break;
 
-			case SYS_waitpid:
-		  //Need to write
+	    case SYS_waitpid:
+		//Need to write
 		break;
-
-	    
 	    default:
 		kprintf("Unknown syscall %d\n", callno);
 		err = ENOSYS;
@@ -181,9 +179,17 @@ syscall(struct trapframe *tf)
  * Thus, you can trash it and do things another way if you prefer.
  */
 
-// I don't know why we would use this, since sys_thread() gets the trapframe anyway...
 void
 enter_forked_process(struct trapframe *tf)
 {
 	(void)*tf;
+	/* Advance PC to avoid restarting syscall and forkbombing */
+	tf->tf_epc += 4;
+	/* If we got here, we've suceeded. Retval is 0 to indicate child process.
+	 * Signal no error.
+      	 */
+	tf->tf_v0 = 0;
+	tf->tf_a3 = 0;
+	/* Warp out of this strange land */
+	mips_usermode(tf);
 }

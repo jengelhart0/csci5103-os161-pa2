@@ -108,6 +108,7 @@ struct addrspace *proc_getas(void);
 
 /* Change the address space of the current process, and return the old one. */
 struct addrspace *proc_setas(struct addrspace *);
+struct addrspace *proc_setas(struct proc *proc, struct addrspace *newas);
 
 
 // PID LIST HELPER FUNCTIONS //
