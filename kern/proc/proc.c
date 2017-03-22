@@ -84,15 +84,11 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
-	int error = 0;
-	proc->pid = new_pid(&error);
-	if(proc->pid < 0) {
-		//TODO: at this point, error contains an error code, if it should be reported
-		return 0;
-	}
+	int error;
+	if(error = new_pid(&proc))
+		return error;
 	return proc;
 }
-
 /*
  * Destroy a proc structure.
  *
@@ -172,8 +168,11 @@ proc_destroy(struct proc *proc)
 		}
 		as_destroy(as);
 	}
+	
+	int error;
+	if(error = remove_pid(proc->pid))
+		return error;
 
-	// TODO: Remove pid from pidlist
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 
@@ -187,6 +186,9 @@ proc_destroy(struct proc *proc)
 void
 proc_bootstrap(void)
 {
+	if(pid_list_init()) {
+		panic("pid_list initialization failed\n");
+	}
 	kproc = proc_create("[kernel]");
 	if (kproc == NULL) {
 		panic("proc_create for kproc failed\n");
@@ -321,6 +323,7 @@ proc_setas(struct addrspace *newas)
 	KASSERT(proc != NULL);
 
 	spinlock_acquire(&proc->p_lock);
+
 	oldas = proc->p_addrspace;
 	proc->p_addrspace = newas;
 	spinlock_release(&proc->p_lock);
@@ -342,30 +345,41 @@ proc_setas(struct proc *proc, struct addrspace *newas)
 	spinlock_release(&proc->p_lock);
 	return oldas;
 }
-// I believe this is a better solution than using a hash table, given the relatively
-// small amount of memory SYS161 provides. If many processes are running, then there 
-// probably won't be many processes created in quick succession (otherwise we'd run out of memory), 
-// and if many processes have quit, the next new processes should be quickly assigned to a low-numbered
-// pid. This avoids the (I think) greater complexity of a hash table and hash function overhead.
-// FORK TODO: synchronize access here!!
-pid_t new_pid(int* err) {
-	//if this is the first process, create list and pid = __PID_MIN:
-	if (pid_list == NULL) {
-		pid_list = kmalloc(sizeof(struct pid_list_node));
-		//if list was NULL and could not alloc, must be out of memory
-		if(pid_list == NULL) {
-			*err = ENOMEM;
-			return -1;
-		}
-		pid_list->next = NULL;
-		pid_list->pid = __PID_MIN-1;
-		return __PID_MIN-1;
+/* called in proc_bootstrap to set up pid list before kproc created */
+int pid_list_init(void) {
+	/* create list and pid = __PID_MIN-1
+	 * (the first process created is the kernel process, and limits.h defines
+	 * __PID_MIN to correspond to the first user process)
+	 */
+	pid_list = kmalloc(sizeof(struct pid_list));
+	if(pid_list == NULL || pid_list->head == NULL) {
+		return ENOMEM;
 	}
+	spinlock_init(&pid_list->pl_lock);
+	//if list was NULL and could not alloc, must be out of memory
+	return 0;
+}
+/* generates a new pid, adds to pid list, associates with passed process */
+int new_pid(struct proc *process) {
+	spinlock_acquire(&pid_list->pl_lock);
+	// if this is the first process, initialize 
+	if(pid_list->knode == NULL) {
+		struct pid_list_node *kn;
+		pid_list->knode = kmalloc(sizeof(struct pid_list_node));
+		kn = pid_list->knode;
+		if(kn == NULL) {
+			return ENOMEM;
+		}
+		kn->next = NULL;
+		kn->pid = __PID_MIN-1;
+		// associate process and pid
+		kn->proc = process;
+		process->pid = __PID_MIN-1;
 
-	else {
-		struct pid_list_node* prev =  pid_list;
-		struct pid_list_node* cur = pid_list->next;
-		int next_expected_pid = pid_list->pid + 1;
+	} else {
+		struct pid_list_node* prev =  pid_list->knode;
+		struct pid_list_node* cur = pid_list->knode->next;
+		int next_expected_pid = pid_list->knode->pid + 1;
 		while(cur != NULL && cur->pid == next_expected_pid) {
 			prev = prev->next;
 			cur = cur->next;
@@ -373,39 +387,44 @@ pid_t new_pid(int* err) {
 		}
 		//When we get here, prev == the highest numbered process before a gap is reached
 		if(prev->pid == __PID_MAX) {
-			*err = ENPROC; //error for proc table being full
-			return -1;
+			//error for proc table being full
+			return ENPROC;
 		} 
 		cur = kmalloc(sizeof(struct pid_list_node));
 		//if n was NULL and could not alloc, must be out of memory
 		if(cur == NULL) {
-			*err = ENOMEM; 
-			return -1;
+			return ENOMEM; 
 		}
 		cur->pid = prev->pid +1;
 		cur->next = prev->next;
 		prev->next = cur;
-		return cur->pid;
+		// associate process and pid
+		cur->proc = process;
+		process->pid = cur->pid;	
 	}
+	spinlock_release(&pid_list->pl_lock);
+	return 0;
 }
 
-// returns 0 if successful
-pid_t remove_pid(pid_t p, int* err) {
-	if(p < __PID_MIN || pid_list == NULL) {
+// returns 0 if successful, error if not
+int remove_pid(pid_t p) {
+	spinlock_acquire(&pid_list->pl_lock);
+	if(p < __PID_MIN || p > __PID_MAX || pid_list->knode == NULL) {
 		panic("Tried to remove an invalid PID");
 	}
-	struct pid_list_node* prev = pid_list;
-	struct pid_list_node* cur = pid_list->next;
-	while(cur!=NULL && cur->pid!=p) {
+	struct pid_list_node* prev = pid_list->knode;
+	struct pid_list_node* cur = pid_list->knode->next;
+	while(cur != NULL && cur->pid != p) {
 		prev = cur;
 		cur = cur->next;
 	}
 	if(cur==NULL) {
 		//pid was not in list
-		*err = EINVAL;
-		return -1;
+		return EINVAL;
 	}
 	prev->next = cur->next;
+	cur->next = NULL;
 	kfree(cur);
+	spinlock_release(&pid_list->pl_lock);
 	return 0;
 }

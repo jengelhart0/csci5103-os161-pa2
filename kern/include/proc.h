@@ -76,14 +76,26 @@ struct proc {
   // ids for this process and its parent
   pid_t pid, ppid;
 };
+/* Structures for maintaining list of pids.
+ * I believe this is a better solution than using a hash table, given the relatively
+ * small amount of memory SYS161 provides. If many processes are running, then there 
+ * probably won't be many processes created in quick succession (otherwise we'd run out of memory), 
+ * and if many processes have quit, the next new processes should be quickly assigned to a low-numbered
+ * pid.
+ */
+
+struct pid_list {
+  pid_list_node *knode; // node for kernel process
+  struct spinlock pl_lock;
+};
 
 struct pid_list_node {
   pid_t pid;
-  struct pid_list_node* next;
+  struct pid_list_node *next;
 };
 
 /* List for tracking pids */
-extern struct pid_list_node* pid_list;
+extern struct pid_list* pid_list;
 
 /* This is the process structure for the kernel and for kernel-only threads. */
 extern struct proc *kproc;
@@ -113,10 +125,13 @@ struct addrspace *proc_setas(struct proc *proc, struct addrspace *newas);
 
 // PID LIST HELPER FUNCTIONS //
 
+/* Called from proc_bootstrap(), before kernel proc initialized */
+int pid_list_init(void);
+
 /* Add a new pid to list of all pids */
-pid_t new_pid(int* err);
+int new_pid(struct proc *proc);
 
 /* Remove a pid from the list of all pids, returns 0 if successful*/
-pid_t remove_pid(pid_t p, int* err);
+int remove_pid(pid_t p);
 
 #endif /* _PROC_H_ */
