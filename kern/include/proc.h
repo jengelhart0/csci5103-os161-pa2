@@ -73,8 +73,10 @@ struct proc {
   struct vnode *p_cwd;    /* current working directory */
 
   /* add more material here as needed */
-  // ids for this process and its parent
+  /* ids for this process and its parent */
   pid_t pid, ppid;
+  /* linked nodes for process children */
+  struct proc_node *children;
 };
 /* Structures for maintaining list of pids.
  * I believe this is a better solution than using a hash table, given the relatively
@@ -83,15 +85,22 @@ struct proc {
  * and if many processes have quit, the next new processes should be quickly assigned to a low-numbered
  * pid.
  */
-
 struct pid_list {
   pid_list_node *knode; // node for kernel process
   struct spinlock pl_lock;
 };
-
+/*
+ * Linked node structures (two different ones to allow pid_list_node to hold a pid_t
+ * rather than pid_t*, to avoid allocating pids on the heap
+ */
 struct pid_list_node {
   pid_t pid;
   struct pid_list_node *next;
+};
+
+struct proc_node {
+  struct proc *p;
+  struct proc_node *next;
 };
 
 /* List for tracking pids */
@@ -133,5 +142,11 @@ int new_pid(struct proc *proc);
 
 /* Remove a pid from the list of all pids, returns 0 if successful*/
 int remove_pid(pid_t p);
+
+/* Add a child process to current process's children nodes */
+int proc_addchild(struct proc *child);
+
+/* Remove a child process with pid_t pid from process's children nodes. */
+int proc_remchild(pid_t pid);
 
 #endif /* _PROC_H_ */

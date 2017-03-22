@@ -428,3 +428,55 @@ int remove_pid(pid_t p) {
 	spinlock_release(&pid_list->pl_lock);
 	return 0;
 }
+
+/* Adds child exit status to current process */
+int proc_addchild(struct proc *child) {
+	struct proc_node *cur_child_node;
+	spinlock_acquire(curthread->t_proc->p_lock);
+	/* start with first child */
+	cur_child_node = curthread->t_proc->children;
+	/* no children currently */
+	if(cur_child_node == NULL) {
+		if((cur_child_node = kmalloc(sizeof(struct proc_node *))) == NULL) {
+			spinlock_release(curthread->t_proc->p_lock);	
+			return ENOMEM;
+		}
+		/* set first child of this process to be the argument process */
+		cur_child_node->next = NULL;
+		cur_child_node->p = child;	
+		spinlock_release(curthread->t_proc->p_lock);
+		return 0;
+	}
+	/* we know the first child existed if we got to this point: find end of list */
+	while(cur_child_node->next) {
+		cur_child_node = cur_child_node->next;		
+	}
+	struct proc_node *new_child_node;
+	/*
+	 * allocate memory for new child node and set its fields, making its process the
+	 * argument child process 
+	 */
+	if((new_child_node = kmalloc(sizeof(struct proc_node *))) == NULL) {
+		spinlock_release(curthread->t_proc->p_lock);
+		return ENOMEM;
+	}
+	cur_child_node->next = new_child_node;
+	new_child_node->p = child;
+	new_child_node->next = NULL;
+
+	spinlock_release(curthread->t_proc->p_lock);
+	return 0;
+}
+
+/*
+ * Removes child process from current process. Removes/frees node, doesn't destroy child
+ * process itself: that is done by proc_destroy.
+ */ 
+int proc_remchild(pid_t pid) {
+	struct proc_node *child_node;
+	child_node = curthread->t_proc->children;
+	while(child_node && child_node->p->pid != pid) {
+		child_node = child_node->next;
+	}
+	return 0;
+}
