@@ -61,6 +61,11 @@
 #define __WCORED     2		/* Process dumped core on a fatal signal. */
 #define __WSTOPPED   3		/* Process stopped (and didn't exit). */
 
+// TODO: Revise if needed
+/* Special constants used by parent/child for communication */
+#define EUNSET -1
+#define EPARENT -2
+
 /* Test macros, used by applications. */
 #define WIFEXITED(x)   (_WWHAT(x)==__WEXITED)
 #define WIFSIGNALED(x) (_WWHAT(x)==__WSIGNALED || _WWHAT(x)==__WCORED)

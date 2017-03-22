@@ -48,8 +48,8 @@
 #include <current.h>
 #include <addrspace.h>
 #include <vnode.h>
- #include <kern/limits.h>
-
+#include <kern/limits.h>
+#include <kern/wait.h>
 /*
  * The process for the kernel; this holds all the kernel-only threads.
  */
@@ -330,7 +330,8 @@ proc_setas(struct addrspace *newas)
 	return oldas;
 }
 /* 
- * Change the address space of the passed process. Otherwise identical to other proc *_setas()
+ * Change the address space of the passed process. Otherwise identical to other 
+ * proc_setas().
  */
 struct addrspace *
 proc_setas(struct proc *proc, struct addrspace *newas)
@@ -368,6 +369,7 @@ int new_pid(struct proc *process) {
 		pid_list->knode = kmalloc(sizeof(struct pid_list_node));
 		kn = pid_list->knode;
 		if(kn == NULL) {
+			spinlock_release(&pid_list->pl_lock);
 			return ENOMEM;
 		}
 		kn->next = NULL;
@@ -375,7 +377,6 @@ int new_pid(struct proc *process) {
 		// associate process and pid
 		kn->proc = process;
 		process->pid = __PID_MIN-1;
-
 	} else {
 		struct pid_list_node* prev =  pid_list->knode;
 		struct pid_list_node* cur = pid_list->knode->next;
@@ -388,11 +389,13 @@ int new_pid(struct proc *process) {
 		//When we get here, prev == the highest numbered process before a gap is reached
 		if(prev->pid == __PID_MAX) {
 			//error for proc table being full
+			spinlock_release(&pid_list->pl_lock);
 			return ENPROC;
 		} 
 		cur = kmalloc(sizeof(struct pid_list_node));
 		//if n was NULL and could not alloc, must be out of memory
 		if(cur == NULL) {
+			spinlock_release(&pid_list->pl_lock);
 			return ENOMEM; 
 		}
 		cur->pid = prev->pid +1;
@@ -429,54 +432,40 @@ int remove_pid(pid_t p) {
 	return 0;
 }
 
-/* Adds child exit status to current process */
-int proc_addchild(struct proc *child) {
-	struct proc_node *cur_child_node;
-	spinlock_acquire(curthread->t_proc->p_lock);
-	/* start with first child */
-	cur_child_node = curthread->t_proc->children;
-	/* no children currently */
-	if(cur_child_node == NULL) {
-		if((cur_child_node = kmalloc(sizeof(struct proc_node *))) == NULL) {
-			spinlock_release(curthread->t_proc->p_lock);	
-			return ENOMEM;
-		}
-		/* set first child of this process to be the argument process */
-		cur_child_node->next = NULL;
-		cur_child_node->p = child;	
-		spinlock_release(curthread->t_proc->p_lock);
-		return 0;
-	}
-	/* we know the first child existed if we got to this point: find end of list */
-	while(cur_child_node->next) {
-		cur_child_node = cur_child_node->next;		
-	}
-	struct proc_node *new_child_node;
-	/*
-	 * allocate memory for new child node and set its fields, making its process the
-	 * argument child process 
-	 */
-	if((new_child_node = kmalloc(sizeof(struct proc_node *))) == NULL) {
-		spinlock_release(curthread->t_proc->p_lock);
+/* initializes fields of allocated exit_node and set child exit_status* */
+int init_exitnode(struct *exit_node en, struct proc *child) {
+	/* set exit node pid to be child's pid */
+	KASSERT(child->pid != NULL);
+
+	en->pid = child->pid;
+
+	/* initialize semaphore of exit status */
+	if((en->es.exit_sem = sem_create("exitsem", 0)) == NULL) {
 		return ENOMEM;
 	}
-	cur_child_node->next = new_child_node;
-	new_child_node->p = child;
-	new_child_node->next = NULL;
-
-	spinlock_release(curthread->t_proc->p_lock);
-	return 0;
-}
-
-/*
- * Removes child process from current process. Removes/frees node, doesn't destroy child
- * process itself: that is done by proc_destroy.
- */ 
-int proc_remchild(pid_t pid) {
-	struct proc_node *child_node;
-	child_node = curthread->t_proc->children;
-	while(child_node && child_node->p->pid != pid) {
-		child_node = child_node->next;
+	/* initialize spinlock of exit status's code */
+	if((en->es.code_lock = kmalloc(sizeof(struct spinlock))) == NULL) {
+		return ENOMEM;
 	}
+	spinlock_init(en->es.code_lock);
+	/* indicate exitcode is unset */
+	en->es.exitcode = EUNSET;
+	
+	en->next = NULL;
+	
+	child->exitstatus_ptr = &en->es;
+
 	return 0;
 }
+
+/* destroys resources in exit_node */
+int destroy_exitnode(struct *exit_node) {
+	KASSERT(exit_node != NULL);
+
+	sem_destroy(en->es.exit_sem);
+	
+	spinlock_cleanup(en->es.code_lock);
+	kfree(en->es.code_lock);
+	return 0;
+}
+
