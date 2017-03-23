@@ -87,12 +87,13 @@ struct proc {
  * pid.
  */
 struct pid_list {
-  pid_list_node *knode; // node for kernel process
+  struct pid_list_node *knode; // node for kernel process
   struct spinlock pl_lock;
 };
 
 struct pid_list_node {
   pid_t pid;
+  struct proc *proc;
   struct pid_list_node *next;
 };
 
@@ -120,6 +121,9 @@ void proc_bootstrap(void);
 /* Create a fresh process for use by runprogram(). */
 struct proc *proc_create_runprogram(const char *name);
 
+/* Create a fresh process for use by fork(). */
+struct proc *proc_create_fork(const char *name);
+
 /* Destroy a process. */
 void proc_destroy(struct proc *proc);
 
@@ -134,7 +138,7 @@ struct addrspace *proc_getas(void);
 
 /* Change the address space of the current process, and return the old one. */
 struct addrspace *proc_setas(struct addrspace *);
-struct addrspace *proc_setas(struct proc *proc, struct addrspace *newas);
+struct addrspace *proc_setas_other(struct proc *proc, struct addrspace *newas);
 
 
 // PID LIST HELPER FUNCTIONS //
@@ -148,10 +152,12 @@ int new_pid(struct proc *proc);
 /* Remove a pid from the list of all pids, returns 0 if successful*/
 int remove_pid(pid_t p);
 
+// EXIT NODE HELPER FUNCTIONS //
+
 /* Add a child process to current process's children nodes */
-int init_exitnode(struct *exit_node en, struct proc *child);
+int init_exitnode(struct exit_node *en, struct proc *child);
 
 /* Remove a child process with pid_t pid from process's children nodes. */
-int destroy_exitnode(struct *exit_node);
+int destroy_exitnode(struct exit_node *en);
 
 #endif /* _PROC_H_ */

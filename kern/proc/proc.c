@@ -43,6 +43,7 @@
  */
 
 #include <types.h>
+#include <synch.h>
 #include <spl.h>
 #include <proc.h>
 #include <current.h>
@@ -54,7 +55,7 @@
  * The process for the kernel; this holds all the kernel-only threads.
  */
 struct proc* kproc;
-struct pid_list_node* pid_list = NULL;
+struct pid_list *pid_list = NULL;
 
 /*
  * Create a proc structure.
@@ -84,9 +85,10 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
-	int error;
-	if(error = new_pid(&proc))
-		return error;
+	if(new_pid(proc)) {
+		kfree(proc);
+		return NULL; 
+	}
 	return proc;
 }
 /*
@@ -169,10 +171,8 @@ proc_destroy(struct proc *proc)
 		as_destroy(as);
 	}
 	
-	int error;
-	if(error = remove_pid(proc->pid))
-		return error;
-
+	remove_pid(proc->pid);
+	
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 
@@ -230,6 +230,80 @@ proc_create_runprogram(const char *name)
 	spinlock_release(&curproc->p_lock);
 
 	return newproc;
+}
+
+/*
+ * Create a fresh proc for use by fork.
+ *
+ * It will have a copy of its parent's address space, and will have
+ * an exit status set up for the parent/child to communicate through
+ * for the purposes of waitpid/_exit.
+ */
+struct proc *
+proc_create_fork(const char *name)
+{
+	struct proc *child_proc = proc_create(name);
+
+	/* Set retpid to be child's pid.
+	 * Note this is initialized in proc_create().
+	 */
+
+	/* set address space of child to a copy of parent's */
+	struct addrspace **addrspace_copy;
+	if((addrspace_copy = kmalloc(sizeof(struct addrspace *))) == NULL) {
+		kfree(child_proc);
+		return NULL;
+	} 
+	if(as_copy(proc_getas(), addrspace_copy)) {
+		kfree(child_proc);
+		return NULL;
+	}
+	proc_setas_other(child_proc, *addrspace_copy);
+	kfree(addrspace_copy);
+
+	// TODO: IF USE PPID, NEED TO GETPID AND SET CHILD_PROC'S PPID TO IT OR GET RID OF PPID
+
+	/* initialize exit status of child and exit node for parent
+	 * this is how child/parent will communicate about exit statuses
+	 */
+	child_proc->child_exitnodes = NULL;
+	struct exit_node *ex_node;
+	if((ex_node = kmalloc(sizeof(struct exit_node))) == NULL) {
+		kfree(child_proc);
+		return NULL;
+	}
+	/* note: init_exitmode also sets child's exit status to
+	 * the status it sets up in ex_node
+	 */
+	if(init_exitnode(ex_node, child_proc)) {
+		kfree(child_proc);
+		kfree(ex_node);
+		return NULL;
+	}
+	/* Lock parent to set cwd and add exit status node to parent */
+	spinlock_acquire(&curproc->p_lock);
+	
+	if (curproc->p_cwd != NULL) {
+		VOP_INCREF(curproc->p_cwd);
+		child_proc->p_cwd = curproc->p_cwd;
+	}
+	/* add initialized exit node to parent's child exit nodes */
+	struct exit_node *cur_node;
+	cur_node = curproc->child_exitnodes;
+	/* currently no children -> no exit_nodes */
+	if(!cur_node) {
+		curproc->child_exitnodes = ex_node;
+	} else {
+		/* iterate until end of nodes */
+		while(cur_node->next) {
+			cur_node = cur_node->next;
+		}
+		cur_node->next = ex_node;
+	}	
+
+	spinlock_release(&curproc->p_lock);
+
+	return child_proc;
 }
 
 /*
@@ -334,7 +408,7 @@ proc_setas(struct addrspace *newas)
  * proc_setas().
  */
 struct addrspace *
-proc_setas(struct proc *proc, struct addrspace *newas)
+proc_setas_other(struct proc *proc, struct addrspace *newas)
 {
 	struct addrspace *oldas;
 
@@ -353,7 +427,7 @@ int pid_list_init(void) {
 	 * __PID_MIN to correspond to the first user process)
 	 */
 	pid_list = kmalloc(sizeof(struct pid_list));
-	if(pid_list == NULL || pid_list->head == NULL) {
+	if(pid_list == NULL || pid_list->knode == NULL) {
 		return ENOMEM;
 	}
 	spinlock_init(&pid_list->pl_lock);
@@ -433,10 +507,9 @@ int remove_pid(pid_t p) {
 }
 
 /* initializes fields of allocated exit_node and set child exit_status* */
-int init_exitnode(struct *exit_node en, struct proc *child) {
+int init_exitnode(struct exit_node *en, struct proc *child) {
 	/* set exit node pid to be child's pid */
-	KASSERT(child->pid != NULL);
-
+	
 	en->pid = child->pid;
 
 	/* initialize semaphore of exit status */
@@ -459,8 +532,8 @@ int init_exitnode(struct *exit_node en, struct proc *child) {
 }
 
 /* destroys resources in exit_node */
-int destroy_exitnode(struct *exit_node) {
-	KASSERT(exit_node != NULL);
+int destroy_exitnode(struct exit_node *en) {
+	KASSERT(en != NULL);
 
 	sem_destroy(en->es.exit_sem);
 	

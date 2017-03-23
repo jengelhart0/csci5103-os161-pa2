@@ -121,7 +121,7 @@ syscall(struct trapframe *tf)
 		// ENOMEM - Sufficient virtual memory for the new process was not available.
 		
 		//also pass whole frame so it can be copied into new process
-		err = sys_fork(&tf, &retval);
+		err = sys_fork(tf, &retval);
 		break;
 
   	    case SYS_execv:
@@ -180,9 +180,11 @@ syscall(struct trapframe *tf)
  */
 
 void
-enter_forked_process(struct trapframe *tf)
+enter_forked_process(void *tframe, unsigned long junk)
 {
-	(void)*tf;
+	(void)junk;
+
+	struct trapframe *tf = (struct trapframe *) tframe;
 	/* Advance PC to avoid restarting syscall and forkbombing */
 	tf->tf_epc += 4;
 	/* If we got here, we've suceeded. Retval is 0 to indicate child process.
