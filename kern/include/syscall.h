@@ -60,4 +60,6 @@ int sys_fork(struct trapframe *tf, pid_t *retpid);
 int sys_reboot(int code);
 int sys___time(userptr_t user_seconds, userptr_t user_nanoseconds);
 
+int sys_printchar(const char *arg);
+
 #endif /* _SYSCALL_H_ */

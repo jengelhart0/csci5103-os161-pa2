@@ -123,6 +123,8 @@ proc_destroy(struct proc *proc)
 		proc->p_cwd = NULL;
 	}
 
+	// MAYBE TODO: if you go with exit_nodes for wait/exit, need to destroy exit nodes for a proc here
+
 	/* VM fields */
 	if (proc->p_addrspace) {
 		/*
@@ -266,20 +268,20 @@ proc_create_fork(const char *name)
 	/* initialize exit status of child and exit node for parent
 	 * this is how child/parent will communicate about exit statuses
 	 */
-	child_proc->child_exitnodes = NULL;
-	struct exit_node *ex_node;
-	if((ex_node = kmalloc(sizeof(struct exit_node))) == NULL) {
-		kfree(child_proc);
-		return NULL;
-	}
-	/* note: init_exitmode also sets child's exit status to
-	 * the status it sets up in ex_node
-	 */
-	if(init_exitnode(ex_node, child_proc)) {
-		kfree(child_proc);
-		kfree(ex_node);
-		return NULL;
-	}
+//	child_proc->child_exitnodes = NULL;
+//	struct exit_node *ex_node;
+//	if((ex_node = kmalloc(sizeof(struct exit_node))) == NULL) {
+//		kfree(child_proc);
+//		return NULL;
+//	}
+//	/* note: init_exitmode also sets child's exit status to
+//	 * the status it sets up in ex_node
+//	 */
+//	if(init_exitnode(ex_node, child_proc)) {
+//		kfree(child_proc);
+//		kfree(ex_node);
+//		return NULL;
+//	}
 	/* Lock parent to set cwd and add exit status node to parent */
 	spinlock_acquire(&curproc->p_lock);
 	
@@ -287,19 +289,19 @@ proc_create_fork(const char *name)
 		VOP_INCREF(curproc->p_cwd);
 		child_proc->p_cwd = curproc->p_cwd;
 	}
-	/* add initialized exit node to parent's child exit nodes */
-	struct exit_node *cur_node;
-	cur_node = curproc->child_exitnodes;
-	/* currently no children -> no exit_nodes */
-	if(!cur_node) {
-		curproc->child_exitnodes = ex_node;
-	} else {
-		/* iterate until end of nodes */
-		while(cur_node->next) {
-			cur_node = cur_node->next;
-		}
-		cur_node->next = ex_node;
-	}	
+//	/* add initialized exit node to parent's child exit nodes */
+//	struct exit_node *cur_node;
+//	cur_node = curproc->child_exitnodes;
+//	/* currently no children -> no exit_nodes */
+//	if(!cur_node) {
+//		curproc->child_exitnodes = ex_node;
+//	} else {
+//		/* iterate until end of nodes */
+//		while(cur_node->next) {
+//			cur_node = cur_node->next;
+//		}
+//		cur_node->next = ex_node;
+//	}	
 
 	spinlock_release(&curproc->p_lock);
 

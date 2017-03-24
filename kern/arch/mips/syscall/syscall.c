@@ -135,6 +135,9 @@ syscall(struct trapframe *tf)
 	    case SYS_waitpid:
 		//Need to write
 		break;
+	    case SYS_printchar:
+		retval = sys_printchar((const char *) tf->tf_a0);
+		break;
 	    default:
 		kprintf("Unknown syscall %d\n", callno);
 		err = ENOSYS;
@@ -184,14 +187,20 @@ enter_forked_process(void *tframe, unsigned long junk)
 {
 	(void)junk;
 
-	struct trapframe *tf = (struct trapframe *) tframe;
+	/* copy trapframe for child */
+	/* required to be declared on thread stack (not heap) */
+	struct trapframe child_tf;
+
+	memmove(&child_tf, (struct trapframe *) tframe, sizeof(struct trapframe));
+
 	/* Advance PC to avoid restarting syscall and forkbombing */
-	tf->tf_epc += 4;
+	child_tf.tf_epc += 4;
 	/* If we got here, we've suceeded. Retval is 0 to indicate child process.
 	 * Signal no error.
       	 */
-	tf->tf_v0 = 0;
-	tf->tf_a3 = 0;
+	child_tf.tf_v0 = 0;
+	child_tf.tf_a3 = 0;
+
 	/* Warp out of this strange land */
-	mips_usermode(tf);
+	mips_usermode(&child_tf);
 }

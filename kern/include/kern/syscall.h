@@ -197,6 +197,8 @@
 #define SYS_reboot       119
 //#define SYS___sysctl   120
 
+//
+#define SYS_printchar	 121
 /*CALLEND*/
 
 
