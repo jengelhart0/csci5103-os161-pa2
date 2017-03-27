@@ -199,6 +199,7 @@
 
 //
 #define SYS_printchar	 121
+#define SYS_myprintf	 122
 /*CALLEND*/
 
 
