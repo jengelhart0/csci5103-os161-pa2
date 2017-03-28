@@ -78,6 +78,16 @@ proc_create(const char *name)
 
 	proc->p_numthreads = 0;
 	spinlock_init(&proc->p_lock);
+	/* Exit status/mailbox structure fields */
+	if((proc->exit_status.exit_sem = sem_create("exitsem", 0)) == NULL) {
+		kfree(proc);
+		return ENOMEM;
+	}
+	/* at creation, process has no children->no exit mailboxes needed */
+	child_esn_mailbox = NULL;
+
+	p_es_needed.needed = 1;
+	spinlock_init(&proc->p_es_needed.esn_lock);
 
 	/* VM fields */
 	proc->p_addrspace = NULL;
@@ -178,6 +188,48 @@ proc_destroy(struct proc *proc)
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 
+	/* exit structure clean-up */
+	sem_destroy(proc->exit_status.exit_sem);
+	spinlock_cleanup(&proc->p_es_needed.esn_lock);
+	
+	/*
+	 * Set all child exit_status_needed's to 0 and free mailbox chain.
+	 * Child proc will free its own exit_status_needed, thus allowing
+	 * continued access to exit_status_needed while letting this process's
+	 * mailbox chain to be freed.
+	 *
+	 * Note: exit_status_needed will not have been freed already because
+	 * child can't be proc_destroyed before parent, unless through parent 
+ 	 * calling waitpid, during which child's exit_status_needed would be
+	 * freed through this function (i.e., proc_destroy), not before. So
+	 * we can be sure data at child_esn still exists here.
+	 */
+
+	struct esn_mailbox *cur;	
+	struct esn_mailbox *prev;
+	/* cur sets exit_status_needed pointed to by current mailbox
+	 * prev frees previous mailbox
+	 */
+	cur = proc->child_esn_mailbox;
+	if(cur) {
+		spinlock_acquire(&cur->child_esn->esn_lock);
+		cur->child_esn->needed = 0;		
+		spinlock_release(&cur->child_esn->esn_lock);
+
+		prev = cur;
+		cur = cur->next;
+		kfree(prev);
+
+		while(cur) {
+			spinlock_acquire(&cur->child_esn->esn_lock);
+			cur->child_esn->needed = 0;		
+			spinlock_release(&cur->child_esn->esn_lock);
+			
+			prev = cur; 
+			cur = cur->next;
+			kfree(prev);
+		}
+	}
 	kfree(proc->p_name);
 	kfree(proc);
 }
@@ -245,10 +297,7 @@ struct proc *
 proc_create_fork(const char *name)
 {
 	struct proc *child_proc = proc_create(name);
-
-	/* Set retpid to be child's pid.
-	 * Note this is initialized in proc_create().
-	 */
+	child_proc->ppid = curthread->t_proc->pid;
 
 	/* set address space of child to a copy of parent's */
 	struct addrspace **addrspace_copy;
@@ -432,6 +481,7 @@ int pid_list_init(void) {
 	if(pid_list == NULL || pid_list->knode == NULL) {
 		return ENOMEM;
 	}
+	pid_list->size = 0;
 	spinlock_init(&pid_list->pl_lock);
 	//if list was NULL and could not alloc, must be out of memory
 	return 0;
@@ -481,6 +531,7 @@ int new_pid(struct proc *process) {
 		cur->proc = process;
 		process->pid = cur->pid;	
 	}
+	pid_list->size++;
 	spinlock_release(&pid_list->pl_lock);
 	return 0;
 }
@@ -504,43 +555,41 @@ int remove_pid(pid_t p) {
 	prev->next = cur->next;
 	cur->next = NULL;
 	kfree(cur);
+	pid_list->size--;
 	spinlock_release(&pid_list->pl_lock);
 	return 0;
 }
 
-/* initializes fields of allocated exit_node and set child exit_status* */
-int init_exitnode(struct exit_node *en, struct proc *child) {
-	/* set exit node pid to be child's pid */
-	
-	en->pid = child->pid;
+int get_exit_code(pid_t pid, int *err, struct proc **proc) {
+	struct pid_list_node *cur;	
+	struct exit_status *es;	
+	int pid_found = 0;
 
-	/* initialize semaphore of exit status */
-	if((en->es.exit_sem = sem_create("exitsem", 0)) == NULL) {
-		return ENOMEM;
+	spinlock_acquire(&pl_lock);
+	/* first process/pid will have been initialized by proc_bootstrap */
+	cur = pid_list->knode->next;
+	/* search list for entry with matching pid */
+	while(cur && !pid_found) {
+		if(pid == cur->pid) {
+			es = &cur->proc->p_exit_status;		
+			pid_found = 1;
+			/* reference used by waitpid to destroy process */
+			*proc = cur->proc;
+		} else {
+			cur = cur->next;
+		}
 	}
-	/* initialize spinlock of exit status's code */
-	if((en->es.code_lock = kmalloc(sizeof(struct spinlock))) == NULL) {
-		return ENOMEM;
+	spinlock_release(&pl_lock);
+	if(cur->ppid != curthread->t_proc->pid) {
+		err = ECHILD;
+		return -1;
 	}
-	spinlock_init(en->es.code_lock);
-	/* indicate exitcode is unset */
-	en->es.exitcode = EUNSET;
-	
-	en->next = NULL;
-	
-	child->exitstatus_ptr = &en->es;
-
-	return 0;
-}
-
-/* destroys resources in exit_node */
-int destroy_exitnode(struct exit_node *en) {
-	KASSERT(en != NULL);
-
-	sem_destroy(en->es.exit_sem);
-	
-	spinlock_cleanup(en->es.code_lock);
-	kfree(en->es.code_lock);
-	return 0;
+	if(!pid_found) {
+		err = ESRCH;
+		return -1;
+	}
+	/* wait on sem until child signals a set exit code */
+	P(&es->exit_sem);
+	return es->exitcode;
 }
 

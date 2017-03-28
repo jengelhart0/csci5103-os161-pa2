@@ -71,13 +71,12 @@ struct proc {
 
   /* VFS */
   struct vnode *p_cwd;    /* current working directory */
-
+ 
+  struct exit_status p_exit_status;
+  struct exit_status_needed p_es_needed;
+  struct esn_mailbox *child_esn_mailbox;
   /* ids for this process and its parent */
   pid_t pid, ppid;
-  /* linked exit nodes for childrens' exit statuses */
-  struct exit_node *child_exitnodes;
-  /* pointer to exit status struct for this process */
-  struct exit_status *exitstatus_ptr;
 };
 /* Structures for maintaining list of pids.
  * I believe this is a better solution than using a hash table, given the relatively
@@ -87,6 +86,7 @@ struct proc {
  * pid.
  */
 struct pid_list {
+  int size;
   struct pid_list_node *knode; // node for kernel process
   struct spinlock pl_lock;
 };
@@ -96,17 +96,21 @@ struct pid_list_node {
   struct proc *proc;
   struct pid_list_node *next;
 };
-
+/* structure for maintaining exit status information */
 struct exit_status {
-  struct semaphore *exit_sem; // used to wait/signal for waitpid usage
-  struct spinlock *code_lock; // ensures ME on code access by child/parent
+  struct semaphore exit_sem; // used to wait/signal for waitpid usage
   int exitcode;
 };
+/* structures for communicating exit status needs between parent/child */
+struct exit_status_needed {
+  int needed;
+  struct spinlock esn_lock;
+};
 
-struct exit_node {
-  pid_t pid;
-  struct exit_status es;
-  struct exit_node *next;
+struct esn_mailbox {
+  pid_t child_pid;
+  struct exit_status_needed *child_esn;
+  struct esn_mailbox *next_mailbox;
 };
 
 /* List for tracking pids */
@@ -152,12 +156,7 @@ int new_pid(struct proc *proc);
 /* Remove a pid from the list of all pids, returns 0 if successful*/
 int remove_pid(pid_t p);
 
-// EXIT NODE HELPER FUNCTIONS //
-
-/* Add a child process to current process's children nodes */
-int init_exitnode(struct exit_node *en, struct proc *child);
-
-/* Remove a child process with pid_t pid from process's children nodes. */
-int destroy_exitnode(struct exit_node *en);
+/* Helper for waitpid(). */
+int get_exit_code(pid_t pid);
 
 #endif /* _PROC_H_ */

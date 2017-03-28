@@ -113,7 +113,6 @@ syscall(struct trapframe *tf)
 		//always successful 
 		err = 0;
 		break;
-
             case SYS_fork:
                 //pass retval as above, but use return for error reporting, possible errors by man page:
 		// EMPROC - The current user already has too many processes.
@@ -129,11 +128,14 @@ syscall(struct trapframe *tf)
 		break;
 		  
             case SYS__exit:
-		//Need to write
+		err = 0;
+		sys__exit(tf->tf_a0);
 		break;
 
 	    case SYS_waitpid:
-		//Need to write
+		err = sys_waitpid(tf->tf_a0,
+				  (userptr_t)tf->tf_a1,
+				  tf->tf_a2, &retval);
 		break;
 	    case SYS_printchar:
 		kprintf(tf->tf_a0);
