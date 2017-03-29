@@ -72,10 +72,12 @@ struct proc {
   /* VFS */
   struct vnode *p_cwd;    /* current working directory */
  
+  /* Exit Status */
   struct exit_status p_exit_status;
   struct exit_status_needed p_es_needed;
   struct esn_mailbox *child_esn_mailbox;
-  /* ids for this process and its parent */
+
+  /* PID/PPID */
   pid_t pid, ppid;
 };
 /* Structures for maintaining list of pids.
@@ -159,4 +161,6 @@ int remove_pid(pid_t p);
 /* Helper for waitpid(). */
 int get_exit_code(pid_t pid);
 
+/* Cleans zombie processes */
+void proc_exorcise(void);
 #endif /* _PROC_H_ */

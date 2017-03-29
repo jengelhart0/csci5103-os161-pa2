@@ -783,7 +783,6 @@ thread_exit(void)
 	 * Detach from our process. You might need to move this action
 	 * around, depending on how your wait/exit works.
 	 */
-	// TODO: make this call proc_remthread only if the process has associated threads still
 	if(cur->t_proc != NULL && cur->t_proc->p_numthreads != 0) {
 		proc_remthread(cur);
 	}

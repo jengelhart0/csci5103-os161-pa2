@@ -78,16 +78,6 @@ proc_create(const char *name)
 
 	proc->p_numthreads = 0;
 	spinlock_init(&proc->p_lock);
-	/* Exit status/mailbox structure fields */
-	if((proc->exit_status.exit_sem = sem_create("exitsem", 0)) == NULL) {
-		kfree(proc);
-		return ENOMEM;
-	}
-	/* at creation, process has no children->no exit mailboxes needed */
-	child_esn_mailbox = NULL;
-
-	p_es_needed.needed = 1;
-	spinlock_init(&proc->p_es_needed.esn_lock);
 
 	/* VM fields */
 	proc->p_addrspace = NULL;
@@ -95,7 +85,25 @@ proc_create(const char *name)
 	/* VFS fields */
 	proc->p_cwd = NULL;
 
+	/* Exit status/mailbox structure fields */
+	if((proc->p_exit_status.exit_sem = sem_create("exitsem", 0)) == NULL) {
+		kfree(proc);
+		return ENOMEM;
+	}
+
+	/* Initialized standardly for consistency (note no real exit status < 0) */
+	proc->p_exit_status.exitcode = -1;	
+
+	/* At creation every exit status assumed needed */
+	proc->p_es_needed.needed = 1;
+	spinlock_init(&proc->p_es_needed.esn_lock);
+
+	/* At creation, process has no children->no exit mailboxes needed */
+	proc->child_esn_mailbox = NULL;
+
+	/* PID allocation. PPID set in proc_create_fork() */
 	if(new_pid(proc)) {
+		sem_destroy(&proc->exit_status.exit_sem);
 		kfree(proc);
 		return NULL; 
 	}
@@ -132,9 +140,6 @@ proc_destroy(struct proc *proc)
 		VOP_DECREF(proc->p_cwd);
 		proc->p_cwd = NULL;
 	}
-
-	// MAYBE TODO: if you go with exit_nodes for wait/exit, need to destroy exit nodes for a proc here
-
 	/* VM fields */
 	if (proc->p_addrspace) {
 		/*
@@ -182,38 +187,34 @@ proc_destroy(struct proc *proc)
 		}
 		as_destroy(as);
 	}
-	
-	remove_pid(proc->pid);
-	
+		
 	KASSERT(proc->p_numthreads == 0);
 	spinlock_cleanup(&proc->p_lock);
 
-	/* exit structure clean-up */
-	sem_destroy(proc->exit_status.exit_sem);
+	/* Exit structure clean-up */
+	sem_destroy(proc->p_exit_status.exit_sem);
 	spinlock_cleanup(&proc->p_es_needed.esn_lock);
 	
 	/*
 	 * Set all child exit_status_needed's to 0 and free mailbox chain.
-	 * Child proc will free its own exit_status_needed, thus allowing
-	 * continued access to exit_status_needed while letting this process's
-	 * mailbox chain to be freed.
+	 * Child has continued access to needed while letting this process's
+	 * mailbox chain be freed.
 	 *
-	 * Note: exit_status_needed will not have been freed already because
-	 * child can't be proc_destroyed before parent, unless through parent 
- 	 * calling waitpid, during which child's exit_status_needed would be
-	 * freed through this function (i.e., proc_destroy), not before. So
+	 * Note: Child can't be proc_destroyed before parent, unless through
+	 * parent calling waitpid, during which child's p_es_needed would be
+	 * wiped through this function (i.e., proc_destroy), not before. So
 	 * we can be sure data at child_esn still exists here.
 	 */
 
 	struct esn_mailbox *cur;	
 	struct esn_mailbox *prev;
-	/* cur sets exit_status_needed pointed to by current mailbox
-	 * prev frees previous mailbox
+	/* cur sets exit_status_needed pointed to by current mailbox.
+	 * prev frees previous mailbox.
 	 */
 	cur = proc->child_esn_mailbox;
 	if(cur) {
 		spinlock_acquire(&cur->child_esn->esn_lock);
-		cur->child_esn->needed = 0;		
+		cur->child_esn.needed = 0;		
 		spinlock_release(&cur->child_esn->esn_lock);
 
 		prev = cur;
@@ -222,7 +223,7 @@ proc_destroy(struct proc *proc)
 
 		while(cur) {
 			spinlock_acquire(&cur->child_esn->esn_lock);
-			cur->child_esn->needed = 0;		
+			cur->child_esn.needed = 0;		
 			spinlock_release(&cur->child_esn->esn_lock);
 			
 			prev = cur; 
@@ -230,6 +231,9 @@ proc_destroy(struct proc *proc)
 			kfree(prev);
 		}
 	}
+
+	remove_pid(proc->pid);
+
 	kfree(proc->p_name);
 	kfree(proc);
 }
@@ -297,6 +301,7 @@ struct proc *
 proc_create_fork(const char *name)
 {
 	struct proc *child_proc = proc_create(name);
+
 	child_proc->ppid = curthread->t_proc->pid;
 
 	/* set address space of child to a copy of parent's */
@@ -312,25 +317,6 @@ proc_create_fork(const char *name)
 	proc_setas_other(child_proc, *addrspace_copy);
 	kfree(addrspace_copy);
 
-	// TODO: IF USE PPID, NEED TO GETPID AND SET CHILD_PROC'S PPID TO IT OR GET RID OF PPID
-
-	/* initialize exit status of child and exit node for parent
-	 * this is how child/parent will communicate about exit statuses
-	 */
-//	child_proc->child_exitnodes = NULL;
-//	struct exit_node *ex_node;
-//	if((ex_node = kmalloc(sizeof(struct exit_node))) == NULL) {
-//		kfree(child_proc);
-//		return NULL;
-//	}
-//	/* note: init_exitmode also sets child's exit status to
-//	 * the status it sets up in ex_node
-//	 */
-//	if(init_exitnode(ex_node, child_proc)) {
-//		kfree(child_proc);
-//		kfree(ex_node);
-//		return NULL;
-//	}
 	/* Lock parent to set cwd and add exit status node to parent */
 	spinlock_acquire(&curproc->p_lock);
 	
@@ -338,19 +324,6 @@ proc_create_fork(const char *name)
 		VOP_INCREF(curproc->p_cwd);
 		child_proc->p_cwd = curproc->p_cwd;
 	}
-//	/* add initialized exit node to parent's child exit nodes */
-//	struct exit_node *cur_node;
-//	cur_node = curproc->child_exitnodes;
-//	/* currently no children -> no exit_nodes */
-//	if(!cur_node) {
-//		curproc->child_exitnodes = ex_node;
-//	} else {
-//		/* iterate until end of nodes */
-//		while(cur_node->next) {
-//			cur_node = cur_node->next;
-//		}
-//		cur_node->next = ex_node;
-//	}	
 
 	spinlock_release(&curproc->p_lock);
 
@@ -592,4 +565,34 @@ int get_exit_code(pid_t pid, int *err, struct proc **proc) {
 	P(&es->exit_sem);
 	return es->exitcode;
 }
+/*
+ * Removes zombie processes. Creates a temporary array of proc * that
+ * will be destroyed once all processes have been considered. Necessary
+ * because proc_destroy alters the exit needed flag of any child process.
+ */
+void proc_exorcise(void) {
+	spinlock_acquire(&pid_list->pl_lock);
 
+	struct proc *to_destroy[pid_list->size];
+	int lastidx = 0;
+
+	struct pid_list_node *cur;
+	struct proc *curproc;
+	/* we assume kernel proc is resident since operating system running */
+	cur = pid_list->knode->next;
+	while(cur) {
+		curproc = cur->proc;
+		spinlock_acquire(&curproc.p_lock);
+		if(curproc->p_exit_status.exitcode != -1 &&
+		   curproc->p_es_needed.needed == 0) {
+			to_destroy[lastidx++] = curproc;		
+		} 
+		spinlock_release(&curproc.p_lock);
+		cur = cur->next;
+	}
+	int i;
+	for(i = 0; i < lastidx; i++) {
+		proc_destroy(to_destroy[i]);
+	}
+	spinlock_release(&pid_list->pl_lock);
+}
