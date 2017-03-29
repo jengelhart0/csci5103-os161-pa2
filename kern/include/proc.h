@@ -37,12 +37,30 @@
  */
 
 #include <spinlock.h>
+#include <synch.h>
 #include <types.h>
 #include <kern/errno.h>
 
 struct addrspace;
 struct thread;
 struct vnode;
+
+/* structure for maintaining exit status information */
+struct exit_status {
+  struct semaphore *exit_sem; // used to wait/signal for waitpid usage
+  int exitcode;
+};
+/* structures for communicating exit status needs between parent/child */
+struct exit_status_needed {
+  int needed;
+  struct spinlock esn_lock;
+};
+
+struct esn_mailbox {
+  pid_t child_pid;
+  struct exit_status_needed *child_esn;
+  struct esn_mailbox *next_mailbox;
+};
 
 /*
  * Process structure.
@@ -98,22 +116,6 @@ struct pid_list_node {
   struct proc *proc;
   struct pid_list_node *next;
 };
-/* structure for maintaining exit status information */
-struct exit_status {
-  struct semaphore exit_sem; // used to wait/signal for waitpid usage
-  int exitcode;
-};
-/* structures for communicating exit status needs between parent/child */
-struct exit_status_needed {
-  int needed;
-  struct spinlock esn_lock;
-};
-
-struct esn_mailbox {
-  pid_t child_pid;
-  struct exit_status_needed *child_esn;
-  struct esn_mailbox *next_mailbox;
-};
 
 /* List for tracking pids */
 extern struct pid_list* pid_list;
@@ -159,7 +161,7 @@ int new_pid(struct proc *proc);
 int remove_pid(pid_t p);
 
 /* Helper for waitpid(). */
-int get_exit_code(pid_t pid);
+int get_exit_code(pid_t pid, userptr_t status, struct proc **proc);
 
 /* Cleans zombie processes */
 void proc_exorcise(void);

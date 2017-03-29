@@ -138,11 +138,11 @@ syscall(struct trapframe *tf)
 				  tf->tf_a2, &retval);
 		break;
 	    case SYS_printchar:
-		kprintf(tf->tf_a0);
+		kprintf((const char *)tf->tf_a0);
 	//	retval = sys_printchar((const char *) tf->tf_a0);
 	//	break;
 	    case SYS_myprintf:
-		kprintf(tf->tf_a0);
+		kprintf((const char *)tf->tf_a0);
 	    default:
 		kprintf("Unknown syscall %d\n", callno);
 		err = ENOSYS;

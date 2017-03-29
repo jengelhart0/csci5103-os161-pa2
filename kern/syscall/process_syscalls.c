@@ -19,18 +19,18 @@ int sys_getpid(int32_t *pid) {
  	return(0);
 }
 
-int sys_waitpid(pid_t pid, int *status, int options, pid_t *retpid) {
+int sys_waitpid(pid_t pid, userptr_t status, int options, pid_t *retpid) {
 	if(status == NULL) {
 		return EFAULT;
 	}
 	if(options) {
 		return EINVAL;
 	}
-	int *err;
+	int err;
 	struct proc *child_proc;
 	/* get exit code and store in status location */
-	if((*status = get_exit_code(pid, err, &child_proc)) < 0) {
-		return *err;
+	if((err = get_exit_code(pid, status, &child_proc)) < 0) {
+		return err;
 	}
 	*retpid = pid;
 	/* 
@@ -52,21 +52,21 @@ int sys_waitpid(pid_t pid, int *status, int options, pid_t *retpid) {
 		spinlock_release(&curthread->t_proc->p_lock);
 		return ECHILD;
 	}
-	if(cur->pid == pid) {
-		curthread->t_proc->child_esn_mailbox = cur->next;
+	if(cur->child_pid == pid) {
+		curthread->t_proc->child_esn_mailbox = cur->next_mailbox;
 		kfree(cur);
 	} else {
 		prev = cur;
-		cur = cur->next;
-		while(cur && cur->pid != pid) {
+		cur = cur->next_mailbox;
+		while(cur && cur->child_pid != pid) {
 			prev = cur;
-			cur = cur->next;
+			cur = cur->next_mailbox;
 		}
 		if(!cur) {
 			spinlock_release(&curthread->t_proc->p_lock);
 			return ECHILD;
 		}
-		prev->next = cur->next;
+		prev->next_mailbox = cur->next_mailbox;
 		kfree(cur);
 	}
 	spinlock_release(&curthread->t_proc->p_lock);
@@ -82,11 +82,11 @@ void sys__exit(int exitcode) {
 		spinlock_release(&proc->p_es_needed.esn_lock);
 		proc_remthread(curthread);
 		proc_destroy(proc);
-	else {
+	} else {
 		spinlock_release(&proc->p_es_needed.esn_lock);
 		struct exit_status *es = &proc->p_exit_status;
 		es->exitcode = exitcode;
-		V(&es->exit_sem);
+		V(es->exit_sem);
 	}
 	thread_exit();	
 }
@@ -112,7 +112,7 @@ int sys_fork(struct trapframe *tf, int32_t *retpid) {
 		prev_mailbox = cur_mailbox;
 		cur_mailbox = cur_mailbox->next_mailbox;
 	}		
-	cur_mailbox = kmalloc(sizeof(esn_mailbox));
+	cur_mailbox = kmalloc(sizeof(struct esn_mailbox));
 	if(cur_mailbox == NULL) {
 		spinlock_release(&curthread->t_proc->p_lock);
 		kfree(child_proc);
@@ -124,7 +124,7 @@ int sys_fork(struct trapframe *tf, int32_t *retpid) {
 	cur_mailbox->next_mailbox = NULL;	
 	/* case when there was existing mailbox at begin of this func execution */
 	if(prev_mailbox) {
-		prev_mailbox->next = cur_mailbox;
+		prev_mailbox->next_mailbox = cur_mailbox;
 	}	
 
 	spinlock_release(&curthread->t_proc->p_lock);

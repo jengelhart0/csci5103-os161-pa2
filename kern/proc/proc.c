@@ -51,6 +51,7 @@
 #include <vnode.h>
 #include <kern/limits.h>
 #include <kern/wait.h>
+#include <copyinout.h>
 /*
  * The process for the kernel; this holds all the kernel-only threads.
  */
@@ -88,7 +89,7 @@ proc_create(const char *name)
 	/* Exit status/mailbox structure fields */
 	if((proc->p_exit_status.exit_sem = sem_create("exitsem", 0)) == NULL) {
 		kfree(proc);
-		return ENOMEM;
+		return NULL;
 	}
 
 	/* Initialized standardly for consistency (note no real exit status < 0) */
@@ -103,7 +104,7 @@ proc_create(const char *name)
 
 	/* PID allocation. PPID set in proc_create_fork() */
 	if(new_pid(proc)) {
-		sem_destroy(&proc->exit_status.exit_sem);
+		sem_destroy(proc->p_exit_status.exit_sem);
 		kfree(proc);
 		return NULL; 
 	}
@@ -214,20 +215,20 @@ proc_destroy(struct proc *proc)
 	cur = proc->child_esn_mailbox;
 	if(cur) {
 		spinlock_acquire(&cur->child_esn->esn_lock);
-		cur->child_esn.needed = 0;		
+		cur->child_esn->needed = 0;		
 		spinlock_release(&cur->child_esn->esn_lock);
 
 		prev = cur;
-		cur = cur->next;
+		cur = cur->next_mailbox;
 		kfree(prev);
 
 		while(cur) {
 			spinlock_acquire(&cur->child_esn->esn_lock);
-			cur->child_esn.needed = 0;		
+			cur->child_esn->needed = 0;		
 			spinlock_release(&cur->child_esn->esn_lock);
 			
 			prev = cur; 
-			cur = cur->next;
+			cur = cur->next_mailbox;
 			kfree(prev);
 		}
 	}
@@ -534,7 +535,7 @@ int remove_pid(pid_t p) {
 	return 0;
 }
 
-int get_exit_code(pid_t pid, int *err, struct proc **proc) {
+int get_exit_code(pid_t pid, userptr_t status, struct proc **proc) {
 	struct pid_list_node *cur;	
 	struct exit_status *es;	
 	int pid_found = 0;
@@ -554,17 +555,17 @@ int get_exit_code(pid_t pid, int *err, struct proc **proc) {
 		}
 	}
 	spinlock_release(&pid_list->pl_lock);
-	if(cur->ppid != curthread->t_proc->pid) {
-		*err = ECHILD;
-		return -1;
+	if(cur->proc->ppid != curthread->t_proc->pid) {
+		return ECHILD;
 	}
 	if(!pid_found) {
-		*err = ESRCH;
-		return -1;
+		return ESRCH;
 	}
 	/* wait on sem until child signals a set exit code */
-	P(&es->exit_sem);
-	return es->exitcode;
+	P(es->exit_sem);
+	
+	copyout(&es->exitcode, status, sizeof(int));
+	return 0;
 }
 /*
  * Removes zombie processes. Creates a temporary array of proc * that
@@ -578,17 +579,17 @@ void proc_exorcise(void) {
 	int lastidx = 0;
 
 	struct pid_list_node *cur;
-	struct proc *curproc;
+	struct proc *cur_proc;
 	/* we assume kernel proc is resident since operating system running */
 	cur = pid_list->knode->next;
 	while(cur) {
-		curproc = cur->proc;
-		spinlock_acquire(&curproc.p_lock);
-		if(curproc->p_exit_status.exitcode != -1 &&
-		   curproc->p_es_needed.needed == 0) {
-			to_destroy[lastidx++] = curproc;		
+		cur_proc = cur->proc;
+		spinlock_acquire(&cur_proc->p_lock);
+		if(cur_proc->p_exit_status.exitcode != -1 &&
+		   cur_proc->p_es_needed.needed == 0) {
+			to_destroy[lastidx++] = cur_proc;		
 		} 
-		spinlock_release(&curproc.p_lock);
+		spinlock_release(&cur_proc->p_lock);
 		cur = cur->next;
 	}
 	int i;
