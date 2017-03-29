@@ -523,6 +523,7 @@ int remove_pid(pid_t p) {
 	}
 	if(cur==NULL) {
 		//pid was not in list
+		spinlock_release(&pid_list->pl_lock);
 		return EINVAL;
 	}
 	prev->next = cur->next;
@@ -538,7 +539,7 @@ int get_exit_code(pid_t pid, int *err, struct proc **proc) {
 	struct exit_status *es;	
 	int pid_found = 0;
 
-	spinlock_acquire(&pl_lock);
+	spinlock_acquire(&pid_list->pl_lock);
 	/* first process/pid will have been initialized by proc_bootstrap */
 	cur = pid_list->knode->next;
 	/* search list for entry with matching pid */
@@ -552,13 +553,13 @@ int get_exit_code(pid_t pid, int *err, struct proc **proc) {
 			cur = cur->next;
 		}
 	}
-	spinlock_release(&pl_lock);
+	spinlock_release(&pid_list->pl_lock);
 	if(cur->ppid != curthread->t_proc->pid) {
-		err = ECHILD;
+		*err = ECHILD;
 		return -1;
 	}
 	if(!pid_found) {
-		err = ESRCH;
+		*err = ESRCH;
 		return -1;
 	}
 	/* wait on sem until child signals a set exit code */

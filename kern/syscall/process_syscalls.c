@@ -32,6 +32,7 @@ int sys_waitpid(pid_t pid, int *status, int options, pid_t *retpid) {
 	if((*status = get_exit_code(pid, err, &child_proc)) < 0) {
 		return *err;
 	}
+	*retpid = pid;
 	/* 
 	 * Remove mailbox corresponding to child with pid. Note
          * this does not destroy the esn itself: proc_destroy does that
@@ -44,12 +45,15 @@ int sys_waitpid(pid_t pid, int *status, int options, pid_t *retpid) {
 	 */
 	spinlock_acquire(&curthread->t_proc->p_lock);
 	cur = curthread->t_proc->child_esn_mailbox;
+	/* Here and below, if a matching child_esn_mailbox node not found,
+	 * this pid must not be a child
+	 */
 	if(!cur) {
 		spinlock_release(&curthread->t_proc->p_lock);
 		return ECHILD;
 	}
 	if(cur->pid == pid) {
-		t_proc->child_esn_mailbox = cur->next;
+		curthread->t_proc->child_esn_mailbox = cur->next;
 		kfree(cur);
 	} else {
 		prev = cur;
@@ -62,7 +66,7 @@ int sys_waitpid(pid_t pid, int *status, int options, pid_t *retpid) {
 			spinlock_release(&curthread->t_proc->p_lock);
 			return ECHILD;
 		}
-		prev = cur->next;
+		prev->next = cur->next;
 		kfree(cur);
 	}
 	spinlock_release(&curthread->t_proc->p_lock);
@@ -73,13 +77,14 @@ int sys_waitpid(pid_t pid, int *status, int options, pid_t *retpid) {
 void sys__exit(int exitcode) {
 	struct proc *proc = curthread->t_proc;
 	spinlock_acquire(&proc->p_es_needed.esn_lock);
-	if(!curthread->t_proc->p_es_needed.needed) {
+
+	if(!(proc->p_es_needed.needed)) {
 		spinlock_release(&proc->p_es_needed.esn_lock);
 		proc_remthread(curthread);
-		proc_destroy(curthread->t_proc);
+		proc_destroy(proc);
 	else {
 		spinlock_release(&proc->p_es_needed.esn_lock);
-		struct exit_status *es = &curthread->t_proc->p_exit_status;
+		struct exit_status *es = &proc->p_exit_status;
 		es->exitcode = exitcode;
 		V(&es->exit_sem);
 	}
@@ -100,6 +105,7 @@ int sys_fork(struct trapframe *tf, int32_t *retpid) {
 	/* add new mailbox and pointer to child p_es_needed */
 	struct esn_mailbox *cur_mailbox;
 	struct esn_mailbox *prev_mailbox = NULL;
+	spinlock_acquire(&curthread->t_proc->p_lock);
 	cur_mailbox = curthread->t_proc->child_esn_mailbox;
 	
 	while(cur_mailbox) {
@@ -108,18 +114,22 @@ int sys_fork(struct trapframe *tf, int32_t *retpid) {
 	}		
 	cur_mailbox = kmalloc(sizeof(esn_mailbox));
 	if(cur_mailbox == NULL) {
+		spinlock_release(&curthread->t_proc->p_lock);
 		kfree(child_proc);
 		return ENOMEM;
 	}
 	cur_mailbox->child_pid = child_proc->pid;
+	/* p_es_needed initialized to 1 in proc_create() */
 	cur_mailbox->child_esn = &child_proc->p_es_needed;
 	cur_mailbox->next_mailbox = NULL;	
-	/* case when there was no mailbox to begin with */
+	/* case when there was existing mailbox at begin of this func execution */
 	if(prev_mailbox) {
 		prev_mailbox->next = cur_mailbox;
 	}	
-			
-	/* copy tf to newly allocated tf to pass child. Needed to avoid
+
+	spinlock_release(&curthread->t_proc->p_lock);
+		
+	/* Copy tf to newly allocated tf to pass child. Needed to avoid
 	 * corrupting child if parent gets through exception_return
 	 * before child gets through enter_forked_process 
 	 */
