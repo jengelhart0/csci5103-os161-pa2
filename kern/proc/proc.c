@@ -95,18 +95,24 @@ proc_create(const char *name)
 	/* Initialized standardly for consistency (note no real exit status < 0) */
 	proc->p_exit_status.exitcode = -1;	
 
-	/* At creation every exit status assumed needed */
-	proc->p_es_needed.needed = 1;
+	/* Only forked processes should have exit statuses remain */
+	proc->p_es_needed.needed = 0;
 	spinlock_init(&proc->p_es_needed.esn_lock);
 
 	/* At creation, process has no children->no exit mailboxes needed */
 	proc->child_esn_mailbox = NULL;
 
-	/* PID allocation. PPID set in proc_create_fork() */
+	/* PID allocation. */
 	if(new_pid(proc)) {
 		sem_destroy(proc->p_exit_status.exit_sem);
 		kfree(proc);
 		return NULL; 
+	}
+	/* if we are creating the kernel thread, it is parentless */
+	if(curthread) {
+		proc->ppid = curthread->t_proc->pid;
+	} else {
+		proc->ppid = 0;
 	}
 	return proc;
 }
@@ -195,43 +201,6 @@ proc_destroy(struct proc *proc)
 	/* Exit structure clean-up */
 	sem_destroy(proc->p_exit_status.exit_sem);
 	spinlock_cleanup(&proc->p_es_needed.esn_lock);
-	
-	/*
-	 * Set all child exit_status_needed's to 0 and free mailbox chain.
-	 * Child has continued access to needed while letting this process's
-	 * mailbox chain be freed.
-	 *
-	 * Note: Child can't be proc_destroyed before parent, unless through
-	 * parent calling waitpid, during which child's p_es_needed would be
-	 * wiped through this function (i.e., proc_destroy), not before. So
-	 * we can be sure data at child_esn still exists here.
-	 */
-
-	struct esn_mailbox *cur;	
-	struct esn_mailbox *prev;
-	/* cur sets exit_status_needed pointed to by current mailbox.
-	 * prev frees previous mailbox.
-	 */
-	cur = proc->child_esn_mailbox;
-	if(cur) {
-		spinlock_acquire(&cur->child_esn->esn_lock);
-		cur->child_esn->needed = 0;		
-		spinlock_release(&cur->child_esn->esn_lock);
-
-		prev = cur;
-		cur = cur->next_mailbox;
-		kfree(prev);
-
-		while(cur) {
-			spinlock_acquire(&cur->child_esn->esn_lock);
-			cur->child_esn->needed = 0;		
-			spinlock_release(&cur->child_esn->esn_lock);
-			
-			prev = cur; 
-			cur = cur->next_mailbox;
-			kfree(prev);
-		}
-	}
 
 	remove_pid(proc->pid);
 
@@ -303,8 +272,6 @@ proc_create_fork(const char *name)
 {
 	struct proc *child_proc = proc_create(name);
 
-	child_proc->ppid = curthread->t_proc->pid;
-
 	/* set address space of child to a copy of parent's */
 	struct addrspace **addrspace_copy;
 	if((addrspace_copy = kmalloc(sizeof(struct addrspace *))) == NULL) {
@@ -318,16 +285,20 @@ proc_create_fork(const char *name)
 	proc_setas_other(child_proc, *addrspace_copy);
 	kfree(addrspace_copy);
 
-	/* Lock parent to set cwd and add exit status node to parent */
+	/* Lock parent to set cwd */
 	spinlock_acquire(&curproc->p_lock);
 	
 	if (curproc->p_cwd != NULL) {
 		VOP_INCREF(curproc->p_cwd);
 		child_proc->p_cwd = curproc->p_cwd;
 	}
-
+	
 	spinlock_release(&curproc->p_lock);
 
+	/* at this point, no chance parent will be accessing exit status needed */
+	child_proc->p_es_needed.needed = 1;
+
+	
 	return child_proc;
 }
 
@@ -452,7 +423,7 @@ int pid_list_init(void) {
 	 * __PID_MIN to correspond to the first user process)
 	 */
 	pid_list = kmalloc(sizeof(struct pid_list));
-	if(pid_list == NULL || pid_list->knode == NULL) {
+	if(pid_list == NULL) {
 		return ENOMEM;
 	}
 	pid_list->size = 0;

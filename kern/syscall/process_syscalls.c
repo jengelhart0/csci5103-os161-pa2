@@ -76,8 +76,47 @@ int sys_waitpid(pid_t pid, userptr_t status, int options, pid_t *retpid) {
 
 void sys__exit(int exitcode) {
 	struct proc *proc = curthread->t_proc;
-	spinlock_acquire(&proc->p_es_needed.esn_lock);
+	/*
+	 * Set all child exit_status_needed's to 0 and free mailbox chain.
+	 * Child has continued access to needed while letting this process's
+	 * mailbox chain be freed.
+	 *
+	 * Setting children needed flag to 0 is necessary here because parent
+	 * might not be proc_destroy()ed before child sys__exit()s and checks
+	 * its needed flag. Therefore, it must happen on parent exit. Freeing
+	 * the children mailboxes here makes sense because they are only needed
+	 * for the purpose of communicating to children that their exit status
+	 * is no longer needed.
+	 */
 
+	struct esn_mailbox *cur;	
+	struct esn_mailbox *prev;
+	/* cur sets exit_status_needed pointed to by current mailbox.
+	 * prev frees previous mailbox.
+	 */
+
+	cur = proc->child_esn_mailbox;
+	if(cur) {
+		spinlock_acquire(&cur->child_esn->esn_lock);
+		cur->child_esn->needed = 0;		
+		spinlock_release(&cur->child_esn->esn_lock);
+
+		prev = cur;
+		cur = cur->next_mailbox;
+		kfree(prev);
+
+		while(cur) {
+			spinlock_acquire(&cur->child_esn->esn_lock);
+			cur->child_esn->needed = 0;		
+			spinlock_release(&cur->child_esn->esn_lock);
+			
+			prev = cur; 
+			cur = cur->next_mailbox;
+			kfree(prev);
+		}
+	}
+
+	spinlock_acquire(&proc->p_es_needed.esn_lock);
 	if(!(proc->p_es_needed.needed)) {
 		spinlock_release(&proc->p_es_needed.esn_lock);
 		proc_remthread(curthread);
@@ -88,6 +127,7 @@ void sys__exit(int exitcode) {
 		es->exitcode = exitcode;
 		V(es->exit_sem);
 	}
+
 	thread_exit();	
 }
 
@@ -122,10 +162,13 @@ int sys_fork(struct trapframe *tf, int32_t *retpid) {
 	/* p_es_needed initialized to 1 in proc_create() */
 	cur_mailbox->child_esn = &child_proc->p_es_needed;
 	cur_mailbox->next_mailbox = NULL;	
+
 	/* case when there was existing mailbox at begin of this func execution */
 	if(prev_mailbox) {
 		prev_mailbox->next_mailbox = cur_mailbox;
-	}	
+	} else {
+		curthread->t_proc->child_esn_mailbox = cur_mailbox;	
+	}
 
 	spinlock_release(&curthread->t_proc->p_lock);
 		
