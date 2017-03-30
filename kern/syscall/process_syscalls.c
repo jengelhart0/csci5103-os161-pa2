@@ -28,7 +28,7 @@ int sys_waitpid(pid_t pid, userptr_t status, int options, pid_t *retpid) {
 	}
 	int err;
 	struct proc *child_proc;
-	/* get exit code and store in status location */
+	/* get exit code and store in status location; destroy child */
 	if((err = get_exit_code(pid, status, &child_proc)) < 0) {
 		return err;
 	}
@@ -114,6 +114,7 @@ void sys__exit(int exitcode) {
 			cur = cur->next_mailbox;
 			kfree(prev);
 		}
+		proc->child_esn_mailbox = NULL;
 	}
 
 	spinlock_acquire(&proc->p_es_needed.esn_lock);

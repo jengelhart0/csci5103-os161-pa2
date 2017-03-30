@@ -102,6 +102,9 @@ proc_create(const char *name)
 	/* At creation, process has no children->no exit mailboxes needed */
 	proc->child_esn_mailbox = NULL;
 
+	/* Before trying to allocate a new pid, clean out any zombie processes */
+	proc_exorcise();
+
 	/* PID allocation. */
 	if(new_pid(proc)) {
 		sem_destroy(proc->p_exit_status.exit_sem);
@@ -135,6 +138,8 @@ proc_destroy(struct proc *proc)
 
 	KASSERT(proc != NULL);
 	KASSERT(proc != kproc);
+
+	remove_pid(proc->pid);
 
 	/*
 	 * We don't take p_lock in here because we must have the only
@@ -201,8 +206,6 @@ proc_destroy(struct proc *proc)
 	/* Exit structure clean-up */
 	sem_destroy(proc->p_exit_status.exit_sem);
 	spinlock_cleanup(&proc->p_es_needed.esn_lock);
-
-	remove_pid(proc->pid);
 
 	kfree(proc->p_name);
 	kfree(proc);
@@ -496,6 +499,7 @@ int remove_pid(pid_t p) {
 	if(cur==NULL) {
 		//pid was not in list
 		spinlock_release(&pid_list->pl_lock);
+		kprintf("Tried to remove pid not in list\n");
 		return EINVAL;
 	}
 	prev->next = cur->next;
@@ -544,28 +548,34 @@ int get_exit_code(pid_t pid, userptr_t status, struct proc **proc) {
  * because proc_destroy alters the exit needed flag of any child process.
  */
 void proc_exorcise(void) {
-	spinlock_acquire(&pid_list->pl_lock);
-
-	struct proc *to_destroy[pid_list->size];
 	int lastidx = 0;
-
-	struct pid_list_node *cur;
-	struct proc *cur_proc;
-	/* we assume kernel proc is resident since operating system running */
-	cur = pid_list->knode->next;
-	while(cur) {
-		cur_proc = cur->proc;
-		spinlock_acquire(&cur_proc->p_lock);
-		if(cur_proc->p_exit_status.exitcode != -1 &&
-		   cur_proc->p_es_needed.needed == 0) {
-			to_destroy[lastidx++] = cur_proc;		
-		} 
-		spinlock_release(&cur_proc->p_lock);
-		cur = cur->next;
+	spinlock_acquire(&pid_list->pl_lock);
+	struct proc *to_destroy[pid_list->size];
+	/* No need to look if the kernel proc is the only (indeed 
+	 * doing so will segfault
+	 */
+	if(pid_list->size > 1 && pid_list->knode) {
+		struct pid_list_node *cur;
+		struct proc *cur_proc;
+		/* we assume kernel proc is resident since
+		 * operating system running
+		 */
+		cur = pid_list->knode->next;
+		while(cur) {
+			cur_proc = cur->proc;
+			spinlock_acquire(&cur_proc->p_lock);
+			if(cur_proc->p_exit_status.exitcode != -1 &&
+			   cur_proc->p_es_needed.needed == 0) {
+				to_destroy[lastidx++] = cur_proc;		
+			} 
+			spinlock_release(&cur_proc->p_lock);
+			cur = cur->next;
+		}
 	}
+	spinlock_release(&pid_list->pl_lock);
+
 	int i;
 	for(i = 0; i < lastidx; i++) {
 		proc_destroy(to_destroy[i]);
 	}
-	spinlock_release(&pid_list->pl_lock);
 }
