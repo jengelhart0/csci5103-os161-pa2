@@ -58,7 +58,7 @@ dofork(void)
 	int pid;
 	pid = fork();
 	if (pid < 0) {
-//		warn("fork");
+		printchar("Warn: fork\n");
 	}
 	return pid;
 }
@@ -81,9 +81,10 @@ check(void)
 		volatile int seenpid;
 		seenpid = mypid;
 		if (seenpid != getpid()) {
-//			errx(1, "pid mismatch (%d, should be %d) "
-//			     "- your vm is broken!",
-//			     seenpid, getpid());
+			printchar("pid mismatch (%d, should be %d) "
+			          "- your vm is broken!",
+			    	  seenpid, getpid());
+			exit(1);
 		}
 	}
 }
@@ -102,7 +103,6 @@ void
 dowait(int nowait, int pid)
 {
 	int x;
-
 	if (pid<0) {
 		/* fork in question failed; just return */
 		return;
@@ -114,13 +114,15 @@ dowait(int nowait, int pid)
 
 	if (!nowait) {
 		if (waitpid(pid, &x, 0)<0) {
-//			warn("waitpid");
+			printchar("Warn: waitpid");
 		}
 		else if (WIFSIGNALED(x)) {
-//			warnx("pid %d: signal %d", pid, WTERMSIG(x));
+			printchar("pid %d: signal %d", pid, WTERMSIG(x));
+			exit(x);
 		}
 		else if (WEXITSTATUS(x) != 0) {
-//			warnx("pid %d: exit %d", pid, WEXITSTATUS(x));
+			printchar("pid %d: exit %d", pid, WEXITSTATUS(x));
+			exit(x);
 		}
 	}
 }
@@ -142,16 +144,16 @@ test(int nowait)
 	 */
 
 	pid0 = dofork();
-	putchar('A');
+	printchar("A");
 	check();
 	pid1 = dofork();
-	putchar('B');
+	printchar("B");
 	check();
 	pid2 = dofork();
-	putchar('C');
+	printchar("C");
 	check();
 	pid3 = dofork();
-	putchar('D');
+	printchar("D");
 	check();
 
 	/*
@@ -163,7 +165,7 @@ test(int nowait)
 	dowait(nowait, pid1);
 	dowait(nowait, pid0);
 
-	putchar('\n');
+	printchar("\n");
 }
 
 int
@@ -177,14 +179,14 @@ main(int argc, char *argv[])
 		nowait=1;
 	}
 	else if (argc!=1 && argc!=0) {
-//		warnx("usage: forktest [-w]");
+		printchar("usage: forktest [-w]");
 		return 1;
 	}
-//	warnx("Starting. Expect this many:");
-//	write(STDERR_FILENO, expected, strlen(expected));
+//	printchar("Starting. Expect this many:");
+//	printchar("%s %d", expected, strlen(expected));
 
 	test(nowait);
 
-//	warnx("Complete.");
+	printchar("Complete.");
 	return 0;
 }

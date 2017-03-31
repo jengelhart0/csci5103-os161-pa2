@@ -69,6 +69,7 @@ int sys_waitpid(pid_t pid, userptr_t status, int options, pid_t *retpid) {
 		prev->next_mailbox = cur->next_mailbox;
 		kfree(cur);
 	}
+
 	spinlock_release(&curthread->t_proc->p_lock);
 	proc_destroy(child_proc);
 	return 0;
@@ -126,6 +127,13 @@ void sys__exit(int exitcode) {
 		spinlock_release(&proc->p_es_needed.esn_lock);
 		struct exit_status *es = &proc->p_exit_status;
 		es->exitcode = exitcode;
+		/* Ideally, we'd like this to happen in thread_exit, but
+		 * we need to ensure this occurs before a parent is signalled.
+		 * We don't want to context switch to the parent, who tries to
+		 * destroy us before our thread gets removed
+		 */
+		proc_remthread(curthread);
+
 		V(es->exit_sem);
 	}
 
