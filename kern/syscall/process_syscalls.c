@@ -338,8 +338,8 @@ sys_execv(char *progname, char **argv) {
 	for(i = num_args - 1; i >= 0; i--) {
 		DEBUGASSERT(bytesrem >= 0);
 		stackptr -= strlens[i];	
-		result = copyout((void *) &argv_buf[bytesrem - strlens[i]],
-				 (userptr_t) stackptr, strlens[i]);
+		result = copyoutstr((void *) &argv_buf[bytesrem - strlens[i]],
+				 (userptr_t) stackptr, strlens[i], NULL);
 		if(result) {
 			return result;
 		}
@@ -349,21 +349,34 @@ sys_execv(char *progname, char **argv) {
 	DEBUGASSERT(bytesrem == 0);
 	/* Create padding to maintain alignment needed for stackptr. */
 	int totalbytes = bytescopied + sizeof(char *) * num_args;
-	int padding = 0; 
 	int overrun; 
 	if((overrun = totalbytes % ALIGN_SIZE)) {
-		padding = (ALIGN_SIZE - overrun); 
+		totalbytes += (ALIGN_SIZE - overrun); 
 	}
-	stackptr -= (padding + sizeof(char *));
+	stackptr -= totalbytes - bytescopied; 
 	
 	/* Make room on user stack and copyout argptrs to user address space */
-	for(i = num_args; i >= 0; i--) {
-		result = copyout((void *) (argvptr_buf + i), (userptr_t) stackptr, sizeof(char *));
-		stackptr -= sizeof(char *);
-		if(result) {
-			return result;
-		}
-	}		
+	result = copyout((void *) argvptr_buf, (userptr_t) stackptr, sizeof(char *) * num_args);
+	if(result) {
+		return result;
+	}
+
+//	int totalbytes = bytescopied + sizeof(char *) * num_args;
+//	int padding = 0; 
+//	int overrun; 
+//	if((overrun = totalbytes % ALIGN_SIZE)) {
+//		padding = (ALIGN_SIZE - overrun); 
+//	}
+//	stackptr -= (padding + sizeof(char *));
+//	
+//	/* Make room on user stack and copyout argptrs to user address space */
+//	for(i = num_args; i >= 0; i--) {
+//		result = copyout((void *) (argvptr_buf + i), (userptr_t) stackptr, sizeof(char *));
+//		stackptr -= sizeof(char *);
+//		if(result) {
+//			return result;
+//		}
+//	}		
 	/* Warp to user mode. */
 	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
 			  addr of argv*/, NULL /*userspace addr of environment*/,
