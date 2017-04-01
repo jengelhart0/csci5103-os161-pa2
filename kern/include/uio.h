@@ -57,6 +57,10 @@
 
 #include <kern/iovec.h>
 
+struct argstruct {
+	char *arg;
+	struct argstruct *next;
+};
 /* Direction. */
 enum uio_rw {
         UIO_READ,			/* From kernel to uio_seg */

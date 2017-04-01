@@ -12,6 +12,7 @@
 #include <lib.h>
 #include <vm.h>
 #include <vfs.h>
+#include <uio.h>
 
 //defined in machine-dependent types.h, evals to signed 32-bit int for MIPS
 
@@ -269,14 +270,101 @@ sys_execv(char *progname, char **argv) {
 	if (result) {
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
+	}	
+	/* Copy argv to new user address space */
+
+	struct argstruct *cur, *prev;
+	
+	cur = kmalloc(sizeof(argstruct));
+	if(!cur) {
+		return ENOMEM;
+	}
+	result = copyin((const_userptr_t)argv[0], (void *)cur->arg, sizeof(userptr_t));
+	if(result) {
+		return result;
+	}	
+	cur.next = NULL;
+	while(cur->arg) {
+		num_args++;
+		if(num_args > NUM_MAXARGS) {
+			return derp;
+		}
+		prev = cur;
+		cur = kmalloc(sizeof(argstruct));
+		if(!cur) {
+			return ENOMEM;
+		}
+		result = copyin((const_userptr_t) argv[num_args], (void *)cur->arg, sizeof(userptr_t));
+		if(result) {
+			return result;
+		}
+		cur.next = prev;
 	}
 
-	/* Copy argv to new user address space */
 	char *strbuf;
 	strbuf = kmalloc(ARG_MAX);
 	if(!strbuf) {
 		return ENOMEM;
 	}
+	/* save prev here to be cur for iterating a second time later */
+	prev = cur;	
+	size_t actual;
+//	int i;
+	while(cur) {
+		if(cur->arg) {
+			result = copyinstr((const_userptr_t) cur->arg,
+					    strbuf, ARG_MAX, &actual);	
+			if(result) {
+				return result;
+			}		
+			stackptr -= actual;
+			result = copyout((void *)strbuf,
+					 (userptr_t)stackptr, actual);
+			if(result) {
+				return result;
+			}
+		}
+		cur = cur->next;
+	}
+	/* create padding to precede arg strings on stack to align arg pointers */
+	while(stackptr % sizeof(userptr_t)) {
+		stackptr--;
+	}
+
+	stackptr -= sizeof(userptr_t);
+	/* restore end of chain for second iteration */
+	cur = prev;	
+	while(cur) {
+		if(cur->arg) {
+			result = copyout((void *)&cur->arg, 
+					 (userptr_t)stackptr, sizeof(userptr_t));	
+			if(result) {
+				return result;
+			}
+			stackptr -= sizeof(userptr_t);
+		}	
+		cur = cur->next;
+	}
+
+	kfree(strbuf);
+	/* restore last time to free chain */
+	cur = prev;
+	while(cur) {
+		kfree(prev);
+		prev = cur;
+		cur = cur->next;	
+	}
+	kfree(prev);
+	/* Warp to user mode. */
+	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
+			  addr of argv*/, NULL /*userspace addr of environment*/,
+			  stackptr, entrypoint);
+
+
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
+	return EINVAL;
+}
 /*	char argv_buf[ARG_MAX];
 	argv_buf[ARG_MAX-10] = 'd';
 	if(argv_buf[ARG_MAX-10] == 'd') {
@@ -345,16 +433,7 @@ sys_execv(char *progname, char **argv) {
 		return result;
 	}
 */		
-	/* Warp to user mode. */
-//	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
-//			  addr of argv*/, NULL /*userspace addr of environment*/,
-//			  stackptr, entrypoint);
 
-
-	/* enter_new_process does not return. */
-//	panic("enter_new_process returned\n");
-	return EINVAL;
-}
 
 int sys_printchar(const char *arg) {
 	kprintf(arg);
