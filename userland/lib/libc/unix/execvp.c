@@ -39,7 +39,7 @@
  * execv() repeatedly until one of the choices works.
  */
 int
-execvp(const char *prog, char *const *args)
+execvp(const char *prog, char **args)
 {
 	const char *searchpath, *s, *t;
 	char progpath[PATH_MAX];

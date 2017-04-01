@@ -124,7 +124,8 @@ syscall(struct trapframe *tf)
 		break;
 
   	    case SYS_execv:
-		//Need to write
+		err = sys_execv((char *)tf->tf_a0,
+				(char **)tf->tf_a1);
 		break;
 		  
             case SYS__exit:

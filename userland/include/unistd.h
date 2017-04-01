@@ -110,7 +110,7 @@
 
 /* Required. */
 __DEAD void _exit(int code);
-int execv(const char *prog, char *const *args);
+int execv(const char *prog, char **args);
 pid_t fork(void);
 pid_t waitpid(pid_t pid, int *returncode, int flags);
 /*
@@ -157,7 +157,7 @@ int myprintf(const char *format, ...);
  * These are not themselves system calls, but wrapper routines in libc.
  */
 
-int execvp(const char *prog, char *const *args); /* calls execv */
+int execvp(const char *prog, char **args); /* calls execv */
 char *getcwd(char *buf, size_t buflen);		/* calls __getcwd */
 time_t time(time_t *seconds);			/* calls __time */
 
