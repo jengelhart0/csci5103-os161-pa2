@@ -224,7 +224,53 @@ sys_execv(char *progname, char **argv) {
 		return EFAULT;
 	}
 
-	char kprogname[PATH_MAX];
+	/* Copy argv to new user address space */
+
+	struct argstruct *cur;
+	struct argstruct *prev;
+	int num_args = 0;
+	
+	cur = kmalloc(sizeof(struct argstruct));
+	if(!cur) {
+		return ENOMEM;
+	}
+	cur->argaddr = kmalloc(sizeof(vaddr_t));
+	if(!cur->argaddr) {
+		return ENOMEM;
+	}
+	result = copyin((const_userptr_t) argv, (void *)cur->argaddr, sizeof(userptr_t));
+	if(result) {
+		return result;
+	}	
+	cur->next = NULL;
+	/* Note that cur->argaddr exists because otherwise this would have returned ENOMEM */
+	while(*cur->argaddr) {
+		num_args++;
+		if(num_args > NUM_MAXARGS) {
+			return EINVAL;
+		}
+		prev = cur;
+		cur = kmalloc(sizeof(struct argstruct));
+		if(!cur) {
+			return ENOMEM;
+		}
+		cur->argaddr = kmalloc(sizeof(vaddr_t));
+		if(!cur->argaddr) {
+			return ENOMEM;
+		}
+		result = copyin((const_userptr_t) (argv + num_args), (void *)cur->argaddr, sizeof(userptr_t));
+		if(result) {
+			return result;
+		}
+		cur->next = prev;
+	}
+
+
+	char *kprogname;
+	kprogname = (char *) kmalloc(sizeof(PATH_MAX));
+	if(!kprogname) {
+		return ENOMEM;
+	}
 	if((result = copyinstr((const_userptr_t)progname, kprogname, PATH_MAX, NULL))) {
 		return result;
 	}
@@ -239,7 +285,8 @@ sys_execv(char *progname, char **argv) {
 //	KASSERT(proc_getas() == NULL);
 
 	/* This seems appropriate but revisit if as problems */
-	as_destroy(proc_getas());
+//COME BACK TO THIS
+//	as_destroy(proc_getas());
 	/* Create a new address space. */
 	as = as_create();
 	if (as == NULL) {
@@ -271,38 +318,9 @@ sys_execv(char *progname, char **argv) {
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
 	}	
-	/* Copy argv to new user address space */
-
-	struct argstruct *cur, *prev;
-	
-	cur = kmalloc(sizeof(argstruct));
-	if(!cur) {
-		return ENOMEM;
-	}
-	result = copyin((const_userptr_t)argv[0], (void *)cur->arg, sizeof(userptr_t));
-	if(result) {
-		return result;
-	}	
-	cur.next = NULL;
-	while(cur->arg) {
-		num_args++;
-		if(num_args > NUM_MAXARGS) {
-			return derp;
-		}
-		prev = cur;
-		cur = kmalloc(sizeof(argstruct));
-		if(!cur) {
-			return ENOMEM;
-		}
-		result = copyin((const_userptr_t) argv[num_args], (void *)cur->arg, sizeof(userptr_t));
-		if(result) {
-			return result;
-		}
-		cur.next = prev;
-	}
 
 	char *strbuf;
-	strbuf = kmalloc(ARG_MAX);
+	strbuf = kmalloc(sizeof(ARG_MAX));
 	if(!strbuf) {
 		return ENOMEM;
 	}
@@ -311,8 +329,9 @@ sys_execv(char *progname, char **argv) {
 	size_t actual;
 //	int i;
 	while(cur) {
-		if(cur->arg) {
-			result = copyinstr((const_userptr_t) cur->arg,
+		/* By way cur->argaddr is kmalloced and checked we know this won't segfault */
+		if(*cur->argaddr) {
+			result = copyinstr((const_userptr_t) cur->argaddr,
 					    strbuf, ARG_MAX, &actual);	
 			if(result) {
 				return result;
@@ -326,43 +345,44 @@ sys_execv(char *progname, char **argv) {
 		}
 		cur = cur->next;
 	}
-	/* create padding to precede arg strings on stack to align arg pointers */
-	while(stackptr % sizeof(userptr_t)) {
-		stackptr--;
-	}
 
-	stackptr -= sizeof(userptr_t);
-	/* restore end of chain for second iteration */
-	cur = prev;	
-	while(cur) {
-		if(cur->arg) {
-			result = copyout((void *)&cur->arg, 
-					 (userptr_t)stackptr, sizeof(userptr_t));	
-			if(result) {
-				return result;
-			}
-			stackptr -= sizeof(userptr_t);
-		}	
-		cur = cur->next;
-	}
-
-	kfree(strbuf);
-	/* restore last time to free chain */
-	cur = prev;
-	while(cur) {
-		kfree(prev);
-		prev = cur;
-		cur = cur->next;	
-	}
-	kfree(prev);
-	/* Warp to user mode. */
-	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
-			  addr of argv*/, NULL /*userspace addr of environment*/,
-			  stackptr, entrypoint);
-
-
-	/* enter_new_process does not return. */
-	panic("enter_new_process returned\n");
+//	/* create padding to precede arg strings on stack to align arg pointers */
+//	while(stackptr % sizeof(userptr_t)) {
+///		stackptr--;
+//	}
+//
+//	stackptr -= sizeof(userptr_t);
+//	/* restore end of chain for second iteration */
+//	cur = prev;	
+//	while(cur) {
+//		if(cur->arg) {
+//			result = copyout((void *)&cur->arg, 
+//					 (userptr_t)stackptr, sizeof(userptr_t));	
+//			if(result) {
+//				return result;
+//			}
+//			stackptr -= sizeof(userptr_t);
+//		}	
+//		cur = cur->next;
+//	}
+//
+//	kfree(strbuf);
+//	/* restore last time to free chain */
+//	cur = prev->next;
+//	kfree(prev);
+//	while(cur) {
+//		prev = cur;
+//		cur = cur->next;	
+//		kfree(prev);
+//	}
+//	/* Warp to user mode. */
+//	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
+//			  addr of argv*/, NULL /*userspace addr of environment*/,
+//			  stackptr, entrypoint);
+//
+//
+//	/* enter_new_process does not return. */
+//	panic("enter_new_process returned\n");
 	return EINVAL;
 }
 /*	char argv_buf[ARG_MAX];

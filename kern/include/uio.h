@@ -56,9 +56,10 @@
  */
 
 #include <kern/iovec.h>
+#include <addrspace.h>
 
 struct argstruct {
-	char *arg;
+	vaddr_t *argaddr;
 	struct argstruct *next;
 };
 /* Direction. */
