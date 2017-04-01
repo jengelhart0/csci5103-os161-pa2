@@ -272,7 +272,11 @@ sys_execv(char *progname, char **argv) {
 	}
 
 	/* Copy argv to new user address space */
-
+	char *strbuf;
+	strbuf = kmalloc(ARG_MAX);
+	if(!strbuf) {
+		return ENOMEM;
+	}
 /*	char argv_buf[ARG_MAX];
 	argv_buf[ARG_MAX-10] = 'd';
 	if(argv_buf[ARG_MAX-10] == 'd') {
@@ -348,7 +352,7 @@ sys_execv(char *progname, char **argv) {
 
 
 	/* enter_new_process does not return. */
-	panic("enter_new_process returned\n");
+//	panic("enter_new_process returned\n");
 	return EINVAL;
 }
 
