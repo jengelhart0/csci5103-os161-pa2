@@ -215,56 +215,72 @@ int sys_fork(struct trapframe *tf, int32_t *retpid) {
  */
 int
 sys_execv(char *progname, char **argv) {
+
 	struct addrspace *as;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
 	int result = 0;
-
+	
 	if(!(progname && argv)) {
 		return EFAULT;
 	}
+//	char argv_buf[ARG_MAX];
+//	argv_buf[ARG_MAX-10] = 'd';
+//	if(argv_buf[ARG_MAX-10] == 'd') {
+//		kprintf("something");
+//	}
 
-	/* Copy argv to new user address space */
+	char *argv_buf;
+	char **argvptr_buf;
+	argvptr_buf = kmalloc(sizeof(char*) * NUM_MAXARGS);
+	if(!argvptr_buf) {
+		return result;
+	}
+	argv_buf = kmalloc(sizeof(ARG_MAX));
+	if(!argv_buf) {
+		return result;
+	}
 
-	struct argstruct *cur;
-	struct argstruct *prev;
 	int num_args = 0;
-	
-	cur = kmalloc(sizeof(struct argstruct));
-	if(!cur) {
-		return ENOMEM;
-	}
-	cur->argaddr = kmalloc(sizeof(vaddr_t));
-	if(!cur->argaddr) {
-		return ENOMEM;
-	}
-	result = copyin((const_userptr_t) argv, (void *)cur->argaddr, sizeof(userptr_t));
+	result = copyin((const_userptr_t)argv, (void *) argvptr_buf, sizeof(userptr_t));
 	if(result) {
 		return result;
-	}	
-	cur->next = NULL;
-	/* Note that cur->argaddr exists because otherwise this would have returned ENOMEM */
-	while(*cur->argaddr) {
+	}
+	while(argvptr_buf[num_args]) {
 		num_args++;
-		if(num_args > NUM_MAXARGS) {
-			return EINVAL;
-		}
-		prev = cur;
-		cur = kmalloc(sizeof(struct argstruct));
-		if(!cur) {
-			return ENOMEM;
-		}
-		cur->argaddr = kmalloc(sizeof(vaddr_t));
-		if(!cur->argaddr) {
-			return ENOMEM;
-		}
-		result = copyin((const_userptr_t) (argv + num_args), (void *)cur->argaddr, sizeof(userptr_t));
+		result = copyin((const_userptr_t) (argv + num_args), (void *) (argvptr_buf + num_args), 
+				sizeof(userptr_t));
+		if(result) {
+			return result;
+		}					
+	}
+	/* Allocate space to track str lengths (they will all be in one array later) */
+	int *strlens = kmalloc(sizeof(int) * num_args);
+	if(!strlens) {
+		return ENOMEM;
+	}
+
+	size_t actual;
+	int i;
+	int bytescopied = 0;
+//	userptr_t cur_arg;
+	for(i = 0; i < num_args; i++) {
+/*		cur_arg = (userptr_t) 
+			  memmove(&cur_arg, 
+				 (void *) (argv_buf + sizeof(userptr_t) * i),
+
+				 sizeof(userptr_t));
+*/	
+		result = copyinstr((const_userptr_t)argvptr_buf[i], (void *) (argv_buf + bytescopied), ARG_MAX, &actual);
 		if(result) {
 			return result;
 		}
-		cur->next = prev;
+		bytescopied += actual;
+		if(bytescopied > ARG_MAX) {
+			return E2BIG;
+		}
+		strlens[i] = actual;
 	}
-
 
 	char *kprogname;
 	kprogname = (char *) kmalloc(sizeof(PATH_MAX));
@@ -274,10 +290,12 @@ sys_execv(char *progname, char **argv) {
 	if((result = copyinstr((const_userptr_t)progname, kprogname, PATH_MAX, NULL))) {
 		return result;
 	}
+	
 	/* Open the file. */
 	result = vfs_open(kprogname, O_RDONLY, 0, &v);
 	if (result) {
 		return result;
+
 	}
 // true for runprogram but not exec I think: this was forked and had copy of
 // parent as, now we are overwriting that address space
@@ -285,8 +303,7 @@ sys_execv(char *progname, char **argv) {
 //	KASSERT(proc_getas() == NULL);
 
 	/* This seems appropriate but revisit if as problems */
-//COME BACK TO THIS
-//	as_destroy(proc_getas());
+	as_destroy(proc_getas());
 	/* Create a new address space. */
 	as = as_create();
 	if (as == NULL) {
@@ -298,9 +315,6 @@ sys_execv(char *progname, char **argv) {
 	proc_setas(as);
 	as_activate();
 
-	(void)progname;
-	(void)argv;
-	(void)entrypoint;
 	/* Load the executable. */
 	result = load_elf(v, &entrypoint);
 	if (result) {
@@ -317,143 +331,49 @@ sys_execv(char *progname, char **argv) {
 	if (result) {
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
-	}	
-
-	char *strbuf;
-	strbuf = kmalloc(sizeof(ARG_MAX));
-	if(!strbuf) {
-		return ENOMEM;
 	}
-	/* save prev here to be cur for iterating a second time later */
-	prev = cur;	
-	size_t actual;
-//	int i;
-	while(cur) {
-		/* By way cur->argaddr is kmalloced and checked we know this won't segfault */
-		if(*cur->argaddr) {
-			result = copyinstr((const_userptr_t) cur->argaddr,
-					    strbuf, ARG_MAX, &actual);	
-			if(result) {
-				return result;
-			}		
-			stackptr -= actual;
-			result = copyout((void *)strbuf,
-					 (userptr_t)stackptr, actual);
-			if(result) {
-				return result;
-			}
+
+	/* Copy out arg strings to new user stack */
+	int bytesrem = bytescopied;
+	for(i = num_args - 1; i >= 0; i--) {
+		DEBUGASSERT(bytesrem >= 0);
+		stackptr -= strlens[i];	
+		result = copyout((void *) &argv_buf[bytesrem - strlens[i]],
+				 (userptr_t) stackptr, strlens[i]);
+		if(result) {
+			return result;
 		}
-		cur = cur->next;
+		bytesrem -= strlens[i];
+		argvptr_buf[i] = (char *) stackptr;
 	}
+	DEBUGASSERT(bytesrem == 0);
+	/* Create padding to maintain alignment needed for stackptr. */
+	int totalbytes = bytescopied + sizeof(char *) * num_args;
+	int padding = 0; 
+	int overrun; 
+	if((overrun = totalbytes % ALIGN_SIZE)) {
+		padding = (ALIGN_SIZE - overrun); 
+	}
+	stackptr -= (padding + sizeof(char *));
+	
+	/* Make room on user stack and copyout argptrs to user address space */
+	for(i = num_args; i >= 0; i--) {
+		result = copyout((void *) (argvptr_buf + i), (userptr_t) stackptr, sizeof(char *));
+		stackptr -= sizeof(char *);
+		if(result) {
+			return result;
+		}
+	}		
+	/* Warp to user mode. */
+	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
+			  addr of argv*/, NULL /*userspace addr of environment*/,
+			  stackptr, entrypoint);
 
-//	/* create padding to precede arg strings on stack to align arg pointers */
-//	while(stackptr % sizeof(userptr_t)) {
-///		stackptr--;
-//	}
-//
-//	stackptr -= sizeof(userptr_t);
-//	/* restore end of chain for second iteration */
-//	cur = prev;	
-//	while(cur) {
-//		if(cur->arg) {
-//			result = copyout((void *)&cur->arg, 
-//					 (userptr_t)stackptr, sizeof(userptr_t));	
-//			if(result) {
-//				return result;
-//			}
-//			stackptr -= sizeof(userptr_t);
-//		}	
-//		cur = cur->next;
-//	}
-//
-//	kfree(strbuf);
-//	/* restore last time to free chain */
-//	cur = prev->next;
-//	kfree(prev);
-//	while(cur) {
-//		prev = cur;
-//		cur = cur->next;	
-//		kfree(prev);
-//	}
-//	/* Warp to user mode. */
-//	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
-//			  addr of argv*/, NULL /*userspace addr of environment*/,
-//			  stackptr, entrypoint);
-//
-//
-//	/* enter_new_process does not return. */
-//	panic("enter_new_process returned\n");
+
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
 	return EINVAL;
 }
-/*	char argv_buf[ARG_MAX];
-	argv_buf[ARG_MAX-10] = 'd';
-	if(argv_buf[ARG_MAX-10] == 'd') {
-		kprintf("something");
-	}
-*//*	int bytescopied = 0;
-	int num_args = 0;
-
-	result = copyin((const_userptr_t)argv, (void *) argv_buf, sizeof(userptr_t));
-
-	if(result) {
-		return result;
-	}
-
-	bytescopied += sizeof(userptr_t);
-	while(argv_buf[num_args]) {
-		num_args++;
-		result = copyin((const_userptr_t)argv + num_args, (void *) argv_buf + bytescopied, 
-				sizeof(userptr_t));
-		if(result) {
-			return result;
-		}					
-
-		bytescopied += sizeof(userptr_t);
-		if(bytescopied > ARG_MAX) {
-			return E2BIG;
-		}
-	}
-
-	size_t actual;
-	int i;
-	userptr_t cur_arg;
-	for(i = 0; i < num_args; i++) {
-		cur_arg = (userptr_t) 
-			  memmove(&cur_arg, 
-				 (void *) argv_buf + sizeof(userptr_t) * i,
-				 sizeof(userptr_t));
-	
-		result = copyinstr((const_userptr_t)cur_arg, argv_buf + bytescopied, ARG_MAX, &actual);
-		if(result) {
-			return result;
-		}
-
-		bytescopied += actual;
-		if(bytescopied > ARG_MAX) {
-			return E2BIG;
-		}
-	}
-*/	/* Create padding to maintain alignment needed for userptr_t size.
-	 * Necessary because we are placing arg strings after arg pointers,
-	 * which means arg pointers come lower on the stack. Since userptr_t
-	 * is larger than chars, its byte alignment size is higher.
-	 *
-	 */
-/*	int totalbytes = bytescopied;
-	int overrun;
-	if((overrun = bytescopied % sizeof(userptr_t))) {
-		totalbytes += sizeof(userptr_t) - overrun; 
-	}
-
-*/	/* Make room on user stack and copyout the buffer to user address space */
-/*	stackptr -= totalbytes;
-	
-	result = copyout((void *) argv_buf, (userptr_t) stackptr, totalbytes);
-	if(result) {
-		return result;
-	}
-*/		
-
 
 int sys_printchar(const char *arg) {
 	kprintf(arg);

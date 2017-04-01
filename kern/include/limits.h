@@ -48,5 +48,7 @@
 #define LOGIN_NAME_MAX  __LOGIN_NAME_MAX
 #define OPEN_MAX        __OPEN_MAX
 #define IOV_MAX         __IOV_MAX
+#define NUM_MAXARGS	__NUM_MAXARGS
+#define ALIGN_SIZE	__ALIGN_SIZE
 
 #endif /* _LIMITS_H_ */

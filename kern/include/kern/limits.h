@@ -65,6 +65,8 @@
 /* Max bytes for an exec function (should be at least 16K) */
 #define __ARG_MAX       (64 * 1024)
 
+/* Max number of args for exec function */
+#define __NUM_MAXARGS 	__ARG_MAX / 4
 
 /*
  * Important for system behavior, but not a big part of the API.
@@ -105,5 +107,6 @@
 /* Max number of iovec structures at once for readv/writev/preadv/pwritev */
 #define __IOV_MAX       1024
 
+#define __ALIGN_SIZE 	8
 
 #endif /* _KERN_LIMITS_H_ */
