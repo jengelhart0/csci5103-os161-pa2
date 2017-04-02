@@ -224,11 +224,6 @@ sys_execv(char *progname, char **argv) {
 	if(!(progname && argv)) {
 		return EFAULT;
 	}
-//	char argv_buf[ARG_MAX];
-//	argv_buf[ARG_MAX-10] = 'd';
-//	if(argv_buf[ARG_MAX-10] == 'd') {
-//		kprintf("something");
-//	}
 
 	char *argv_buf;
 	char **argvptr_buf;
