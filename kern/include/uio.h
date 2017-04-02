@@ -58,10 +58,7 @@
 #include <kern/iovec.h>
 #include <addrspace.h>
 
-struct argstruct {
-	vaddr_t *argaddr;
-	struct argstruct *next;
-};
+
 /* Direction. */
 enum uio_rw {
         UIO_READ,			/* From kernel to uio_seg */

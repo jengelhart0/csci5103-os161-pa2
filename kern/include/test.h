@@ -96,8 +96,8 @@ int kmalloctest4(int, char **);
 int nettest(int, char **);
 
 /* Routine for running a user-level program. */
-int runprogram(char *progname);
-
+int runprogram(char *progname, int num_args, char **argv);
+int runprogram_args(char *progname, int num_args, char **argv);
 /* Kernel menu system. */
 void menu(char *argstr);
 

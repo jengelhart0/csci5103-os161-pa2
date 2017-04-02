@@ -44,20 +44,165 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <limits.h>
+#include <copyinout.h>
 
 /*
+ * Runprogram with args
  * Load program "progname" and start running it in usermode.
  * Does not return except on error.
  *
  * Calls vfs_open on progname and thus may destroy it.
  */
 int
-runprogram(char *progname)
+runprogram_args(char *progname, int num_args, char **argv)
 {
+
 	struct addrspace *as;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
+	int result = 0;
+	
+	if(!(progname && argv)) {
+		return EFAULT;
+	}
+
+	char *argv_buf;
+	char **argvptr_buf;
+	argvptr_buf = kmalloc(sizeof(char*) * NUM_MAXARGS);
+	if(!argvptr_buf) {
+		return result;
+	}
+	argv_buf = kmalloc(sizeof(ARG_MAX));
+	if(!argv_buf) {
+		return result;
+	}
+
+	memmove((void *) argvptr_buf, (void *)argv, sizeof(char *));
+	int i;
+	for(i = 0; i <= num_args; i++) {
+		memmove((void *) (argvptr_buf + i),
+			   	 (void *) (argv + i), 
+				 sizeof(char *));
+	}
+	/* Allocate space to track str lengths (they will all be in one array later) */
+	int *strlens = kmalloc(sizeof(int) * num_args);
+	if(!strlens) {
+		return ENOMEM;
+	}
+
+	size_t actual;
+	int bytescopied = 0;
+	for(i = 0; i < num_args; i++) {
+		strcpy((char *) (argv_buf + bytescopied),
+					 (char *)argvptr_buf[i]);
+		actual = strlen(argv_buf + bytescopied) + 1;
+		bytescopied += actual;
+		if(bytescopied > ARG_MAX) {
+			return E2BIG;
+		}
+		strlens[i] = actual;
+	}
+
+	char *kprogname;
+	kprogname = (char *) kmalloc(sizeof(PATH_MAX));
+	if(!kprogname) {
+		return ENOMEM;
+	}
+	strcpy(kprogname, progname);
+	
+	/* Open the file. */
+	result = vfs_open(kprogname, O_RDONLY, 0, &v);
+	if (result) {
+		return result;
+
+	}
+	/* This seems appropriate but revisit if as problems */
+	as_destroy(proc_getas());
+	/* Create a new address space. */
+	as = as_create();
+	if (as == NULL) {
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+	/* Switch to it and activate it. */
+	proc_setas(as);
+	as_activate();
+
+	/* Load the executable */
+	result = load_elf(v, &entrypoint);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		vfs_close(v);
+		return result;
+	}
+
+	/* Done with the file now. */
+	vfs_close(v);
+
+	/* Define the user stack in the address space */
+	result = as_define_stack(as, &stackptr);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		return result;
+	}
+
+	/* Copy out arg strings to new user stack */
+	int bytesrem = bytescopied;
+	for(i = num_args - 1; i >= 0; i--) {
+		DEBUGASSERT(bytesrem >= 0);
+		stackptr -= strlens[i];	
+		result = copyoutstr((void *) &argv_buf[bytesrem - strlens[i]],
+				 (userptr_t) stackptr, strlens[i], NULL);
+		if(result) {
+			return result;
+		}
+		bytesrem -= strlens[i];
+		argvptr_buf[i] = (char *) stackptr;
+	}
+	DEBUGASSERT(bytesrem == 0);
+	/* Create padding to maintain alignment needed for stackptr. */
+	int totalbytes = bytescopied + sizeof(char *) * num_args;
+	int overrun; 
+	if((overrun = totalbytes % ALIGN_SIZE)) {
+		totalbytes += (ALIGN_SIZE - overrun); 
+	}
+	stackptr -= totalbytes - bytescopied; 
+
+
+	/* Make room on user stack and copyout argptrs to user address space */
+	result = copyout((void *) argvptr_buf, 
+			 (userptr_t) stackptr, 
+			 sizeof(char *) * num_args);
+	if(result) {
+		return result;
+	}
+		
+	/* Warp to user mode. */
+	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
+			  addr of argv*/, NULL /*userspace addr of environment*/,
+			  stackptr, entrypoint);
+
+
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
+	return EINVAL;
+
+}
+
+int
+runprogram(char *progname, int num_args, char **argv)
+{
+
 	int result;
+	if(num_args > 1) {
+		result = runprogram_args(progname, num_args, argv);
+		return result;
+	}
+	struct addrspace *as;
+	struct vnode *v;
+	vaddr_t entrypoint, stackptr;
 
 	/* Open the file. */
 	result = vfs_open(progname, O_RDONLY, 0, &v);

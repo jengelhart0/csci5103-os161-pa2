@@ -46,12 +46,21 @@ main(int argc, char *argv[])
 
 	if (argc != 3) {
 		printchar("Usage: add num1 num2");
+	} else {
+		printchar("\nProgname sent by runprogram/execv:\n");
+		printchar(argv[0]);
+		printchar("\nFirst operand sent by runprogram/execv:\n");
+		printchar(argv[1]);
+		printchar("\nSecond operand sent by runprogram/execv:\n");
+		printchar(argv[2]);
 	}
+	
+
 
 	i = atoi(argv[1]);
 	j = atoi(argv[2]);
 
-	printchar("Answer: %d\n", i+j);
+	printchar("\nAnswer: %d\n", i+j);
 
 	return 0;
 }

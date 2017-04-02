@@ -237,13 +237,15 @@ sys_execv(char *progname, char **argv) {
 	}
 
 	int num_args = 0;
-	result = copyin((const_userptr_t)argv, (void *) argvptr_buf, sizeof(userptr_t));
+	result = copyin((const_userptr_t)argv,
+			(void *) argvptr_buf, sizeof(userptr_t));
 	if(result) {
 		return result;
 	}
 	while(argvptr_buf[num_args]) {
 		num_args++;
-		result = copyin((const_userptr_t) (argv + num_args), (void *) (argvptr_buf + num_args), 
+		result = copyin((const_userptr_t) (argv + num_args), 
+				(void *) (argvptr_buf + num_args), 
 				sizeof(userptr_t));
 		if(result) {
 			return result;
@@ -258,15 +260,11 @@ sys_execv(char *progname, char **argv) {
 	size_t actual;
 	int i;
 	int bytescopied = 0;
-//	userptr_t cur_arg;
 	for(i = 0; i < num_args; i++) {
-/*		cur_arg = (userptr_t) 
-			  memmove(&cur_arg, 
-				 (void *) (argv_buf + sizeof(userptr_t) * i),
-
-				 sizeof(userptr_t));
-*/	
-		result = copyinstr((const_userptr_t)argvptr_buf[i], (void *) (argv_buf + bytescopied), ARG_MAX, &actual);
+	
+		result = copyinstr((const_userptr_t)argvptr_buf[i], 
+				   (void *) (argv_buf + bytescopied), 
+				   ARG_MAX, &actual);
 		if(result) {
 			return result;
 		}
@@ -282,7 +280,8 @@ sys_execv(char *progname, char **argv) {
 	if(!kprogname) {
 		return ENOMEM;
 	}
-	if((result = copyinstr((const_userptr_t)progname, kprogname, PATH_MAX, NULL))) {
+	if((result = copyinstr((const_userptr_t)progname, 
+				kprogname, PATH_MAX, NULL))) {
 		return result;
 	}
 	
@@ -292,11 +291,6 @@ sys_execv(char *progname, char **argv) {
 		return result;
 
 	}
-// true for runprogram but not exec I think: this was forked and had copy of
-// parent as, now we are overwriting that address space
-//	/* We should be a new process. */
-//	KASSERT(proc_getas() == NULL);
-
 	/* This seems appropriate but revisit if as problems */
 	as_destroy(proc_getas());
 	/* Create a new address space. */
@@ -351,27 +345,16 @@ sys_execv(char *progname, char **argv) {
 	stackptr -= totalbytes - bytescopied; 
 	
 	/* Make room on user stack and copyout argptrs to user address space */
-	result = copyout((void *) argvptr_buf, (userptr_t) stackptr, sizeof(char *) * num_args);
+	result = copyout((void *) argvptr_buf, 
+			 (userptr_t) stackptr, sizeof(char *) * num_args);
 	if(result) {
 		return result;
 	}
+	
+	kfree(strlens);
+	kfree(argv_buf);
+	kfree(argvptr_buf);
 
-//	int totalbytes = bytescopied + sizeof(char *) * num_args;
-//	int padding = 0; 
-//	int overrun; 
-//	if((overrun = totalbytes % ALIGN_SIZE)) {
-//		padding = (ALIGN_SIZE - overrun); 
-//	}
-//	stackptr -= (padding + sizeof(char *));
-//	
-//	/* Make room on user stack and copyout argptrs to user address space */
-//	for(i = num_args; i >= 0; i--) {
-//		result = copyout((void *) (argvptr_buf + i), (userptr_t) stackptr, sizeof(char *));
-//		stackptr -= sizeof(char *);
-//		if(result) {
-//			return result;
-//		}
-//	}		
 	/* Warp to user mode. */
 	enter_new_process(num_args /*argc*/, (userptr_t) stackptr /*userspace 
 			  addr of argv*/, NULL /*userspace addr of environment*/,

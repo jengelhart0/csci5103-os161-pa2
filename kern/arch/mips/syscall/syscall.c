@@ -114,10 +114,6 @@ syscall(struct trapframe *tf)
 		err = 0;
 		break;
             case SYS_fork:
-                //pass retval as above, but use return for error reporting, possible errors by man page:
-		// EMPROC - The current user already has too many processes.
-		// ENPROC - There are already too many processes on the system.
-		// ENOMEM - Sufficient virtual memory for the new process was not available.
 		
 		//also pass whole frame so it can be copied into new process
 		err = sys_fork(tf, &retval);
